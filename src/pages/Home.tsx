@@ -1,0 +1,363 @@
+import { useMemo } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { ArrowRight, Sparkles, Zap } from 'lucide-react'
+import {
+  CATEGORIES,
+  COLLECTIONS,
+  CUSTOMER_LOCATION,
+  LISTINGS,
+  OFFERS,
+  QUICKBUY,
+  STORES,
+} from '../data/catalog'
+import {
+  bestLocalPrice,
+  closestListing,
+  foundNearby,
+  getProduct,
+  listingsForProduct,
+  storeDistance,
+} from '../lib/geo'
+import { formatINR, formatKm } from '../lib/format'
+import {
+  CategoryTile,
+  NearbyMap,
+  ProductCard,
+  SearchBar,
+  StoreRow,
+} from '../components/commerce'
+import { Button, SectionHeading, StatusBadge } from '../components/ui'
+import { useState } from 'react'
+
+export default function Home() {
+  const navigate = useNavigate()
+  const [q, setQ] = useState('')
+
+  const dynamicMsg = useMemo(() => {
+    // Signature NearBuy aliveness signal — grounded in real seeded inventory
+    const p = getProduct('p1')
+    const f = foundNearby('p1')
+    return `${f.stores} stores within 2 km have the ${p.brand} ${p.name.split('—')[0].trim()} in stock.`
+  }, [])
+
+  const availableNear = useMemo(
+    () =>
+      ['p1', 'p13', 'p9', 'p7', 'p18', 'p21', 'p28', 'p23']
+        .map((id) => ({ id, f: foundNearby(id) }))
+        .filter((x) => x.f.stores > 0)
+        .map((x) => x.id),
+    [],
+  )
+
+  const betterPrices = useMemo(() => {
+    return ['p1', 'p10', 'p16', 'p2', 'p18', 'p19']
+      .map((id) => {
+        const p = getProduct(id)
+        const best = bestLocalPrice(id)
+        if (!best) return null
+        const onlinePrice = p.online?.price ?? p.mrp
+        const savings = onlinePrice - best.price
+        return savings > 0 ? { id, savings, best, onlinePrice } : null
+      })
+      .filter(Boolean)
+      .slice(0, 4) as {
+      id: string
+      savings: number
+      best: { store: { id: string; name: string }; distance: number; price: number }
+      onlinePrice: number
+    }[]
+  }, [])
+
+  const storesNear = [...STORES]
+    .map((s) => ({ s, d: storeDistance(s) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 5)
+
+  const fastPicks = useMemo(
+    () =>
+      ['p9', 'p23', 'p15', 'p21', 'p13', 'p22']
+        .map((id) => ({ id, f: foundNearby(id) }))
+        .filter((x) => x.f.fastestMins !== null && x.f.fastestMins < 20)
+        .map((x) => x.id),
+    [],
+  )
+
+  return (
+    <div>
+      {/* ── Hero ─────────────────────────────────────────── */}
+      <section className="bg-primary-50 border-b border-primary-100">
+        <div className="nb-container-wide py-12 lg:py-20 lg:min-h-[520px] flex items-center">
+          <div className="grid lg:grid-cols-2 gap-10 items-center w-full">
+            <div>
+              <p className="text-caption font-bold text-primary-600 uppercase tracking-widest mb-4">
+                Search Online · Find Nearby · Reserve · Pickup · Deliver
+              </p>
+              <h1 className="text-m-hero lg:text-display-lg text-neutral-900">
+                What You Need,
+                <br />
+                Already Nearby.
+              </h1>
+              <p className="text-m-body lg:text-body-lg text-neutral-600 mt-4 max-w-lg">
+                Find products online and from stores around you — compare price, distance and
+                speed, then choose delivery, pickup or reservation.
+              </p>
+              <div className="mt-6 max-w-xl">
+                <SearchBar
+                  value={q}
+                  onChange={setQ}
+                  onSubmit={() => navigate(`/search?q=${encodeURIComponent(q)}`)}
+                />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Button size="lg" onClick={() => navigate('/nearby')}>
+                  📍 Nearby
+                </Button>
+                <Button size="lg" variant="secondary" onClick={() => navigate('/nearby-now')}>
+                  ⚡ Available Now
+                </Button>
+                <Button size="lg" variant="soft" onClick={() => navigate('/nearai')}>
+                  🤖 Ask NearAI
+                </Button>
+              </div>
+              {/* dynamic aliveness message */}
+              <div className="mt-6 inline-flex items-center gap-2 bg-white rounded-full border border-primary-200 px-4 py-2 shadow-soft">
+                <span className="w-2 h-2 rounded-full bg-success-500 animate-pulse" />
+                <p className="text-body-sm font-semibold text-primary-700">{dynamicMsg}</p>
+              </div>
+            </div>
+            <div className="hidden lg:block">
+              <img
+                src="/images/hero.jpg"
+                alt="Products from stores around you on the NearBuy map"
+                className="rounded-2xl shadow-large w-full object-cover"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="nb-container-wide py-10 lg:py-16 space-y-12 lg:space-y-16">
+        {/* ── Categories ───────────────────────────────── */}
+        <section>
+          <SectionHeading title="What do you need today?" sub="Browse by category" action="Explore all" onAction={() => navigate('/explore')} />
+          <div className="nb-scroll-x flex gap-4 sm:grid sm:grid-cols-4 lg:grid-cols-8 pb-2">
+            {CATEGORIES.map((c) => (
+              <CategoryTile key={c.id} categoryId={c.id} />
+            ))}
+          </div>
+        </section>
+
+        {/* ── Available near you ───────────────────────── */}
+        <section>
+          <SectionHeading
+            title="Available Near You"
+            sub="Products currently available around your location."
+            action="See all"
+            onAction={() => navigate('/search?mode=nearby')}
+          />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {availableNear.slice(0, 4).map((id) => (
+              <ProductCard key={id} productId={id} />
+            ))}
+          </div>
+        </section>
+
+        {/* ── Stores around you ────────────────────────── */}
+        <section>
+          <SectionHeading
+            title="Stores Around You"
+            sub="Real shelves, real stock — within walking and riding distance."
+            action="See all"
+            onAction={() => navigate('/stores')}
+          />
+          <div className="grid gap-3 md:grid-cols-2">
+            {storesNear.map(({ s }) => (
+              <StoreRow key={s.id} storeId={s.id} />
+            ))}
+          </div>
+        </section>
+
+        {/* ── Get it fast ──────────────────────────────── */}
+        <section>
+          <SectionHeading
+            title="Get It Fast"
+            sub="Ready for pickup in under 20 minutes."
+            action="Nearby Now"
+            onAction={() => navigate('/nearby-now')}
+          />
+          <div className="nb-scroll-x flex gap-4 pb-2">
+            {fastPicks.map((id) => {
+              const f = foundNearby(id)
+              return (
+                <div key={id} className="w-[240px] shrink-0">
+                  <ProductCard productId={id} compact />
+                  <div className="mt-2 flex justify-center">
+                    <StatusBadge kind="low">⚡ Pickup in ~{f.fastestMins} min</StatusBadge>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
+        {/* ── Better prices nearby ─────────────────────── */}
+        <section>
+          <SectionHeading
+            title="Better Prices Nearby"
+            sub="Local stores beating online — not just fast, often cheaper."
+            action="All deals"
+            onAction={() => navigate('/deals')}
+          />
+          <div className="grid gap-3 md:grid-cols-2">
+            {betterPrices.map(({ id, savings, best }) => (
+              <Link
+                key={id}
+                to={`/product/${id}`}
+                className="nb-card p-4 flex items-center gap-4 hover:shadow-medium transition-shadow duration-normal min-h-touch"
+              >
+                <span className="text-3xl">{getProduct(id).emoji}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-body font-semibold text-neutral-900 truncate">{getProduct(id).name}</p>
+                  <p className="text-[13px] text-neutral-500 mt-0.5">
+                    {best.store.name} · {formatKm(best.distance)} · {formatINR(best.price)}
+                  </p>
+                </div>
+                <StatusBadge kind="stock">Save ₹{savings}</StatusBadge>
+              </Link>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Reserve & pickup ─────────────────────────── */}
+        <section>
+          <SectionHeading
+            title="Reserve & Pickup"
+            sub="Shop books it and packs it before you arrive."
+            action="My reservations"
+            onAction={() => navigate('/reservations')}
+          />
+          <div className="grid lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2 grid grid-cols-2 gap-4">
+              {['p18', 'p2'].map((id) => {
+                const l = closestListing(id)
+                return (
+                  <div key={id} className="relative">
+                    <ProductCard productId={id} />
+                    {l && (
+                      <div className="absolute bottom-2 left-2">
+                        <StatusBadge kind="reserved">📦 {l.store.prepMins} min to pack</StatusBadge>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <div className="rounded-xl bg-reservebg border border-reserveborder p-6 flex flex-col justify-center">
+              <p className="text-h4 font-bold text-neutral-900">Skip the queue.</p>
+              <p className="text-body-sm text-[#6D28D9] mt-2 font-medium">
+                Reserve items with one tap — get a QR pickup code, arrive, scan and go.
+              </p>
+              <ul className="mt-4 space-y-2 text-body-sm text-neutral-700">
+                <li>✓ Pickup windows spread the rush</li>
+                <li>✓ Hold-for-me for small purchases</li>
+                <li>✓ Expiry timers keep shelves moving</li>
+              </ul>
+              <Button variant="reserve" className="mt-5" onClick={() => navigate('/nearby-now')}>
+                Walk-in ready items
+              </Button>
+            </div>
+          </div>
+        </section>
+
+        {/* ── Local deals ──────────────────────────────── */}
+        <section>
+          <SectionHeading title="Local Deals" sub="Location-aware savings from stores around you." action="See all" onAction={() => navigate('/deals')} />
+          <div className="nb-scroll-x flex gap-4 pb-2">
+            {OFFERS.slice(0, 4).map((o) => (
+              <Link
+                key={o.id}
+                to={o.productId ? `/product/${o.productId}` : '/deals'}
+                className="nb-card p-5 w-[300px] shrink-0 hover:shadow-medium transition-shadow duration-normal"
+              >
+                <StatusBadge kind="out">💰 Save ₹{o.savings}</StatusBadge>
+                <p className="text-body font-semibold text-neutral-900 mt-3">{o.title}</p>
+                <p className="text-[13px] text-neutral-500 mt-1 line-clamp-2">{o.detail}</p>
+                {o.endsIn && (
+                  <p className="text-caption text-warning-700 mt-2 font-semibold">⏳ {o.endsIn}</p>
+                )}
+              </Link>
+            ))}
+          </div>
+        </section>
+
+        {/* ── QuickBuy ─────────────────────────────────── */}
+        <section>
+          <SectionHeading title="Buy Again" sub="Frequent purchases — tap to check nearby availability right now." />
+          <div className="nb-scroll-x flex gap-3 pb-2">
+            {QUICKBUY.map((id) => {
+              const f = foundNearby(id)
+              return (
+                <Link
+                  key={id}
+                  to={`/product/${id}`}
+                  className="nb-card px-4 py-3 flex items-center gap-3 min-w-[220px] hover:shadow-medium transition-shadow duration-normal min-h-touch"
+                >
+                  <span className="text-2xl">{getProduct(id).emoji}</span>
+                  <div className="min-w-0">
+                    <p className="text-body-sm font-semibold text-neutral-900 truncate">{getProduct(id).name}</p>
+                    <p className="text-caption text-success-600 font-semibold">
+                      {f.stores > 0 ? `✓ ${f.stores} nearby` : 'Unavailable nearby'}
+                    </p>
+                  </div>
+                </Link>
+              )
+            })}
+          </div>
+        </section>
+
+        {/* ── Ask NearAI ───────────────────────────────── */}
+        <section className="nb-card p-8 lg:p-10 bg-gradient-to-r from-neutral-50 to-primary-50 border-primary-100 flex flex-col md:flex-row items-start md:items-center gap-6">
+          <div className="flex-1">
+            <h2 className="text-m-h2 lg:text-h2 font-bold flex items-center gap-2">
+              🤖 Ask NearAI <Sparkles size={22} className="text-reserve" />
+            </h2>
+            <p className="text-body text-neutral-600 mt-2 max-w-xl">
+              “Where can I get football shoes tonight?” · “Find the cheapest printer nearby” ·
+              “I need a birthday gift under ₹1,000” — answers grounded in real nearby inventory.
+            </p>
+          </div>
+          <Button size="xl" onClick={() => navigate('/nearai')}>
+            Open NearAI <ArrowRight size={20} />
+          </Button>
+        </section>
+
+        {/* ── Collections teaser ───────────────────────── */}
+        <section>
+          <SectionHeading title="Popular in Your Area" sub="Seasonal collections curated for Dwarka." action="Explore" onAction={() => navigate('/explore')} />
+          <div className="nb-scroll-x flex gap-4 pb-2">
+            {COLLECTIONS.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => navigate(`/search?collection=${c.id}`)}
+                className="w-[220px] shrink-0 rounded-xl p-5 text-left hover:shadow-medium transition-shadow duration-normal border border-neutral-200"
+                style={{ background: c.tint }}
+              >
+                <span className="text-3xl">{c.emoji}</span>
+                <p className="text-body font-bold text-neutral-900 mt-3">{c.name}</p>
+                <p className="text-caption text-neutral-500 mt-1">{c.blurb}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Map teaser ───────────────────────────────── */}
+        <section>
+          <SectionHeading title="Your Local Map" sub="Stores, stock and pickup points around Dwarka Sector 22." action="Open Nearby" onAction={() => navigate('/nearby')} />
+          <NearbyMap stores={STORES.slice(0, 6)} height={300} />
+        </section>
+      </div>
+    </div>
+  )
+}
+
+
