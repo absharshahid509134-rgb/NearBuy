@@ -1,0 +1,45 @@
+{
+  "name": "nearbuy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "NearBuy — What You Need, Already Nearby. Local commerce OS: search online, find nearby, reserve, pickup, deliver.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "backend",
+    "services/*"
+  ],
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "dev:web": "npm --workspace @nearbuy/web run dev",
+    "dev:seller": "npm --workspace @nearbuy/seller run dev",
+    "dev:admin": "npm --workspace @nearbuy/admin run dev",
+    "dev:gateway": "npm --workspace @nearbuy/backend run dev",
+    "dev:db": "tsx scripts/dev-db.ts",
+    "build": "tsc -b && vite build",
+    "build:all": "npm run build --workspaces --if-present",
+    "preview": "vite preview --host 0.0.0.0 --port 5173",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx packages/database/prisma/seed.ts",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.446.0",
+    "qrcode.react": "^4.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.45",
+    "tailwindcss": "^3.4.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.3"
+  }
+}
