@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { FULFILLMENT_METHODS, PAYMENT_METHODS, ROLES } from '@nearbuy/types'
+import { FULFILLMENT_METHODS, PAYMENT_METHODS } from '@nearbuy/types'
 /**
  * @nearbuy/validation — Zod schemas shared by API DTO validation and web forms.
  * All API input is validated; these schemas are the single source of truth.
@@ -16,7 +16,9 @@ export const registerSchema = z.object({
   phone: z.string().regex(/^\+?[1-9]\d{9,14}$/, 'Invalid phone').optional(),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   name: z.string().min(1).max(80),
-  role: z.enum(ROLES).default('CUSTOMER'),
+  // Public registration can create only these three account types. Admin,
+  // support, finance and staff roles must be provisioned by trusted staff.
+  role: z.enum(['CUSTOMER', 'SELLER', 'DELIVERY_PARTNER']).default('CUSTOMER'),
 }).refine((d) => d.email || d.phone, { message: 'Email or phone required' })
 
 export const loginSchema = z.object({
@@ -163,6 +165,7 @@ export const checkoutOrderSchema = z.object({
   fulfillment: z.enum(FULFILLMENT_METHODS),
   paymentMethod: z.enum(PAYMENT_METHODS).default('UPI'),
   addressId: z.string().optional(),
+  addressLine: z.string().trim().min(8).max(180).optional(),
   couponCode: z.string().optional(),
 })
 

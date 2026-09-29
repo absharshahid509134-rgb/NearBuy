@@ -13,7 +13,7 @@ import { JwtService } from '@nestjs/jwt'
 import { Throttle } from '@nestjs/throttler'
 import type { Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomInt } from 'node:crypto'
 import type { Role } from '@nearbuy/types'
 import {
   loginSchema,
@@ -79,10 +79,9 @@ export class AuthController {
     const existing = await this.prisma.user.findUnique({ where })
     if (existing) throw Errors.conflict('An account with these details already exists.', 'ACCOUNT_EXISTS')
 
-    // Sensitive roles must not self-serve.
-    const requested: Role = ['ADMIN', 'SUPER_ADMIN', 'SUPPORT_AGENT'].includes(body.role)
-      ? 'CUSTOMER'
-      : (body.role as Role)
+    // Public role allowlist is enforced by registerSchema. A selected portal
+    // never grants a role: the role is assigned here and stored on the user.
+    const requested: Role = body.role
 
     const passwordHash = await bcrypt.hash(body.password, 10)
     const user = await this.prisma.user.create({
@@ -117,7 +116,7 @@ export class AuthController {
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @Post('otp/request')
   async otpRequest(@Body(new ZodValidationPipe(otpRequestSchema)) body: { phone: string }) {
-    const code = String(Math.floor(100000 + Math.random() * 900000))
+    const code = String(randomInt(100000, 1000000))
     await this.cache.set(`otp:${body.phone}`, code, this.config.env.OTP_TTL_SECONDS)
     // In production this is dispatched via the SMS adapter (outbox). Dev returns the code.
     return {
@@ -139,6 +138,7 @@ export class AuthController {
     if (!stored || stored !== body.code) throw Errors.unauthorized('Invalid or expired code.')
     await this.cache.del(`otp:${body.phone}`)
     let user = await this.prisma.user.findUnique({ where: { phone: body.phone } })
+    if (user && user.status !== 'ACTIVE') throw Errors.forbidden('This account is not active.')
     if (!user) {
       user = await this.prisma.user.create({
         data: { phone: body.phone, name: 'NearBuy User', role: 'CUSTOMER', phoneVerified: true, customerProfile: { create: {} } },
@@ -155,7 +155,7 @@ export class AuthController {
     const token = cookies[COOKIE_RT]
     if (!token) throw Errors.unauthorized('Session expired. Please sign in again.')
     const row = await this.prisma.refreshToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { user: true } })
-    if (!row || row.revokedAt || row.expiresAt < new Date()) throw Errors.unauthorized('Session expired. Please sign in again.')
+    if (!row || row.revokedAt || row.expiresAt < new Date() || row.user.status !== 'ACTIVE') throw Errors.unauthorized('Session expired. Please sign in again.')
     await this.prisma.refreshToken.update({ where: { id: row.id }, data: { revokedAt: new Date() } })
     return this.issueTokens(row.user, res)
   }

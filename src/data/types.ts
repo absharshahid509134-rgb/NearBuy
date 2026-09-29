@@ -125,6 +125,8 @@ export interface OrderItem {
 
 export interface Order {
   id: string
+  serverId?: string
+  handoffCode?: string
   items: OrderItem[]
   status: OrderStatus
   fulfillment: FulfillmentType
@@ -138,6 +140,7 @@ export interface Order {
 
 export interface Reservation {
   id: string
+  serverId?: string
   code: string
   items: OrderItem[]
   status: ReservationStatus

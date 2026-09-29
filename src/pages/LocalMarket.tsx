@@ -81,11 +81,11 @@ export default function LocalMarket() {
             ))}
           </div>
           <div className="mt-5 flex flex-wrap gap-3">
-            <Button size="md" onClick={() => navigate('/seller')}>
+            <Button size="md" onClick={() => navigate('/join/seller')}>
               Stock it — become a seller
             </Button>
-            <Button variant="secondary" size="md" onClick={() => navigate('/admin/radar')}>
-              See Demand Radar
+            <Button variant="secondary" size="md" onClick={() => navigate('/nearby')}>
+              Explore nearby demand
             </Button>
           </div>
           <p className="text-caption text-neutral-400 mt-3">

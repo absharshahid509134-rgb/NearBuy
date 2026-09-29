@@ -1,201 +1,202 @@
 import { useState } from 'react'
-import { SEED_ORDERS, SEED_RESERVATIONS, PICKUP_WINDOWS } from '../../data/catalog'
-import { getProduct, getStore } from '../../lib/geo'
-import { formatINR, dayTime } from '../../lib/format'
-import { ProductVisual, ReservationTimeline, Timeline } from '../../components/commerce'
-import { Button, StatusBadge, Tabs } from '../../components/ui'
-import { useApp } from '../../store/AppContext'
+import { CalendarClock, CheckCircle2, ChevronRight, Package, QrCode, RefreshCw } from 'lucide-react'
+import { useSeller, type SellerOrder, type SellerReservation } from '../../seller/SellerContext'
+import { HubEmpty, HubError, HubLoading, rupees, StatusPill, when } from '../../seller/components'
+
+function nextOrderAction(order: SellerOrder): { action: string; label: string } | null {
+  if (order.status === 'READY_FOR_PICKUP' && order.delivery)
+    return null // The rider, not the seller, confirms a delivery at the customer's door.
+  const actions: Record<string, { action: string; label: string }> = {
+    PENDING: { action: 'accept', label: 'Accept order' },
+    CONFIRMED: { action: 'preparing', label: 'Start preparing' },
+    PREPARING: { action: 'packed', label: 'Mark packed' },
+    PACKED: { action: 'ready', label: 'Ready for pickup' },
+    READY_FOR_PICKUP: { action: 'complete', label: 'Complete order' },
+  }
+  return actions[order.status] ?? null
+}
+function nextReservationAction(reservation: SellerReservation): { action: string; label: string } | null {
+  const actions: Record<string, { action: string; label: string }> = {
+    REQUESTED: { action: 'confirm', label: 'Confirm reservation' },
+    CONFIRMED: { action: 'pack', label: 'Mark packed' },
+    PACKING: { action: 'ready', label: 'Ready for pickup' },
+    READY_FOR_PICKUP: { action: 'arrive', label: 'Customer arrived' },
+    CUSTOMER_ARRIVED: { action: 'collect', label: 'Handed to customer' },
+    COLLECTED: { action: 'complete', label: 'Complete reservation' },
+  }
+  return actions[reservation.status] ?? null
+}
 
 export default function SellerOrders() {
-  const [tab, setTab] = useState<'orders' | 'reservations' | 'queue'>('orders')
-  const { toast, reservations, updateReservation } = useApp()
-
+  const { orders, reservations, loading, error, refresh, orderAction, reservationAction } = useSeller()
+  const [tab, setTab] = useState<'orders' | 'reservations'>('orders')
+  const [working, setWorking] = useState<string | null>(null)
+  const [actionError, setActionError] = useState('')
+  async function run(id: string, action: string, kind: 'order' | 'reservation') {
+    setWorking(id)
+    setActionError('')
+    try {
+      if (kind === 'order') await orderAction(id, action)
+      else await reservationAction(id, action)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : 'Could not update this item. Try again.')
+    } finally {
+      setWorking(null)
+    }
+  }
+  if (loading && !orders.length && !reservations.length) return <HubLoading />
+  if (error) return <HubError message={error} retry={() => void refresh()} />
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-m-h2 lg:text-h2 font-bold">Orders & Reservations</h1>
-        <p className="text-body-sm text-neutral-500 mt-1">Accept, prepare, mark ready — customers see it live.</p>
+    <div className="hub-page">
+      <div className="hub-page-header">
+        <div>
+          <p className="hub-overline dark">SELLER HUB / FULFILMENT</p>
+          <h1>Orders & reservations</h1>
+          <p>Everything your neighbours are waiting for, all in one place.</p>
+        </div>
+        <button type="button" className="hub-secondary-button" disabled={loading} onClick={() => void refresh()} aria-label="Refresh orders and reservations">
+          <RefreshCw size={16} /> {loading ? 'Refreshing…' : 'Refresh orders'}
+        </button>
       </div>
-
-      <Tabs<'orders' | 'reservations' | 'queue'>
-        tabs={[
-          { id: 'orders', label: '📦 Orders', count: SEED_ORDERS.length },
-          { id: 'reservations', label: '🔖 Reservations', count: reservations.length },
-          { id: 'queue', label: '🚶 Pickup Queue', count: 3 },
-        ]}
-        active={tab}
-        onChange={setTab}
-      />
-
-      {tab === 'orders' && (
-        <div className="space-y-4">
-          {SEED_ORDERS.map((o) => {
-            const p = getProduct(o.items[0].productId)
-            return (
-              <div key={o.id} className="nb-card p-5 grid lg:grid-cols-[1fr,280px] gap-5">
-                <div>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <p className="font-data font-bold text-body">{o.id}</p>
-                    <StatusBadge
-                      kind={
-                        o.status === 'delivered' || o.status === 'picked_up'
-                          ? 'stock'
-                          : o.status === 'cancelled'
-                            ? 'out'
-                            : 'ready'
-                      }
-                    >
-                      {o.status.replace(/_/g, ' ')}
-                    </StatusBadge>
-                    <StatusBadge kind="closed">{o.fulfillment.replace(/_/g, ' ')}</StatusBadge>
-                    <span className="text-caption text-neutral-400 ml-auto">{dayTime(o.placedAt)}</span>
-                  </div>
-                  <div className="flex items-center gap-3 mt-3">
-                    <ProductVisual product={p} className="w-14 h-14 aspect-none rounded-md" />
+      <div className="hub-tabs" role="tablist" aria-label="Order type">
+        <button
+          role="tab"
+          aria-selected={tab === 'orders'}
+          className={tab === 'orders' ? 'selected' : ''}
+          onClick={() => setTab('orders')}
+        >
+          <Package size={17} /> Orders <span>{orders.length}</span>
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'reservations'}
+          className={tab === 'reservations' ? 'selected' : ''}
+          onClick={() => setTab('reservations')}
+        >
+          <QrCode size={17} /> Reservations <span>{reservations.length}</span>
+        </button>
+      </div>
+      {actionError && (
+        <div className="hub-inline-error" role="alert">
+          {actionError}
+        </div>
+      )}
+      {tab === 'orders' ? (
+        orders.length ? (
+          <div className="hub-records">
+            {orders.map((order) => {
+              const next = nextOrderAction(order)
+              return (
+                <article className="hub-record" key={order.id}>
+                  <div className="hub-record-top">
                     <div>
-                      <p className="text-body-sm font-semibold">{p.name}</p>
-                      <p className="text-caption text-neutral-500">Qty {o.items[0].qty} · {formatINR(o.total)}</p>
+                      <span className="hub-record-icon">
+                        <Package size={20} />
+                      </span>
+                      <div>
+                        <h2>{order.number}</h2>
+                        <p>
+                          {order.user?.name ?? 'Customer'} · {when(order.createdAt)}
+                        </p>
+                      </div>
+                    </div>
+                    <StatusPill status={order.status} />
+                  </div>
+                  <div className="hub-record-body">
+                    <div>
+                      <span>ITEMS</span>
+                      <strong>
+                        {order.items.map((item) => `${item.qty} × ${item.name}`).join(', ') || 'Store order'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>ORDER TOTAL</span>
+                      <strong>{rupees(order.total)}</strong>
                     </div>
                   </div>
-                  <div className="flex gap-2 mt-4">
-                    {['pending', 'confirmed'].includes(o.status) && (
-                      <Button size="sm" variant="success" onClick={() => toast({ kind: 'success', title: 'Order accepted', body: `${o.id} · customer notified.` })}>
-                        Accept Order
-                      </Button>
-                    )}
-                    {['confirmed', 'preparing'].includes(o.status) && (
-                      <Button size="sm" onClick={() => toast({ kind: 'info', title: 'Marked as packed', body: o.id })}>
-                        Mark Packed
-                      </Button>
-                    )}
-                    {o.status === 'preparing' && o.fulfillment !== 'local' && (
-                      <Button size="sm" variant="reserve" onClick={() => toast({ kind: 'success', title: 'Marked ready for pickup', body: o.id })}>
-                        Mark Ready
-                      </Button>
-                    )}
-                    <Button size="sm" variant="secondary">Print slip</Button>
+                  {order.delivery && order.delivery.pickupCode && ['PACKED', 'READY_FOR_PICKUP'].includes(order.status) && (
+                    <div className="hub-handoff-note"><Package size={17} /><span>Rider pickup code <strong>{order.delivery.pickupCode}</strong> · Share it only when the parcel is ready at the counter.</span></div>
+                  )}
+                  {order.delivery && order.status === 'READY_FOR_PICKUP' && <p className="hub-wait-note">Ready for the rider. The order completes after the customer confirms delivery.</p>}
+                  {next && (
+                    <div className="hub-record-actions">
+                      <span>
+                        Next step <ChevronRight size={15} /> {next.label}
+                      </span>
+                      <button
+                        disabled={working === order.id}
+                        onClick={() => void run(order.id, next.action, 'order')}
+                      >
+                        {working === order.id ? 'Updating…' : next.label} <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  )}
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <HubEmpty
+            title="No orders just yet"
+            body="When a customer places an order with your store, it will appear here."
+          />
+        )
+      ) : reservations.length ? (
+        <div className="hub-records">
+          {reservations.map((reservation) => {
+            const next = nextReservationAction(reservation)
+            return (
+              <article className="hub-record" key={reservation.id}>
+                <div className="hub-record-top">
+                  <div>
+                    <span className="hub-record-icon violet">
+                      <QrCode size={20} />
+                    </span>
+                    <div>
+                      <h2>{reservation.code}</h2>
+                      <p>Reserved {when(reservation.createdAt)}</p>
+                    </div>
+                  </div>
+                  <StatusPill status={reservation.status} />
+                </div>
+                <div className="hub-record-body">
+                  <div>
+                    <span>ITEMS TO PREPARE</span>
+                    <strong>
+                      {reservation.items
+                        .map((item) => `${item.qty} × ${item.product?.name ?? 'Product'}`)
+                        .join(', ')}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>PICKUP WINDOW</span>
+                    <strong>
+                      <CalendarClock size={16} /> {reservation.pickupWindow}
+                    </strong>
                   </div>
                 </div>
-                <div className="bg-neutral-50 rounded-xl p-4">
-                  <Timeline
-                    steps={
-                      o.fulfillment === 'pickup'
-                        ? ['Order Confirmed', 'Packed', 'Ready for Pickup', 'Collected']
-                        : ['Order Confirmed', 'Seller Preparing', 'Packed', 'Out for Delivery', 'Delivered']
-                    }
-                    doneCount={o.timeline.length - (o.status === 'cancelled' ? 1 : 0)}
-                  />
-                </div>
-              </div>
+                {next && (
+                  <div className="hub-record-actions">
+                    <span>
+                      <CheckCircle2 size={15} /> Keep the customer updated at each step
+                    </span>
+                    <button
+                      disabled={working === reservation.id}
+                      onClick={() => void run(reservation.id, next.action, 'reservation')}
+                    >
+                      {working === reservation.id ? 'Updating…' : next.label} <ChevronRight size={16} />
+                    </button>
+                  </div>
+                )}
+              </article>
             )
           })}
         </div>
-      )}
-
-      {tab === 'reservations' && (
-        <div className="space-y-4 max-w-3xl">
-          {reservations.map((r) => (
-            <div key={r.id} className="rounded-xl bg-reservebg border border-reserveborder p-5">
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div>
-                  <p className="font-data font-bold text-h5">{r.code}</p>
-                  <p className="text-body-sm text-neutral-600 mt-0.5">
-                    Window {r.window} · {r.items.map((i) => getProduct(i.productId).name).join(', ')}
-                  </p>
-                </div>
-                <StatusBadge kind={r.status === 'ready' ? 'ready' : r.status === 'awaiting' ? 'low' : r.status === 'collected' ? 'stock' : 'reserved'}>
-                  {r.status}
-                </StatusBadge>
-              </div>
-              <div className="mt-4">
-                <ReservationTimeline reservation={r} />
-              </div>
-              <div className="flex gap-2 mt-3 flex-wrap">
-                {r.status === 'awaiting' && (
-                  <>
-                    <Button
-                      size="sm"
-                      variant="success"
-                      onClick={() => {
-                        updateReservation(r.id, {
-                          status: 'confirmed',
-                          timeline: [...r.timeline, { label: 'Confirmed', at: Date.now() }],
-                        })
-                        toast({ kind: 'success', title: 'Reservation confirmed', body: `${r.code} · customer notified.` })
-                      }}
-                    >
-                      Confirm Reservation
-                    </Button>
-                    <Button size="sm" variant="danger" onClick={() => toast({ kind: 'error', title: 'Reservation declined', body: r.code })}>
-                      Not available
-                    </Button>
-                  </>
-                )}
-                {r.status === 'confirmed' && (
-                  <Button size="sm" onClick={() => {
-                    updateReservation(r.id, {
-                      status: 'packed',
-                      timeline: [...r.timeline, { label: 'Packed', at: Date.now() }],
-                    })
-                    toast({ kind: 'info', title: 'Marked packed', body: r.code })
-                  }}>
-                    Mark Packed
-                  </Button>
-                )}
-                {r.status === 'packed' && (
-                  <Button size="sm" variant="reserve" onClick={() => {
-                    updateReservation(r.id, {
-                      status: 'ready',
-                      timeline: [...r.timeline, { label: 'Ready', at: Date.now() }],
-                    })
-                    toast({ kind: 'success', title: 'Ready for pickup', body: `${r.code} · queue position assigned.` })
-                  }}>
-                    Mark Ready
-                  </Button>
-                )}
-                {r.status === 'ready' && (
-                  <Button size="sm" variant="success" onClick={() => {
-                    updateReservation(r.id, {
-                      status: 'collected',
-                      timeline: [...r.timeline, { label: 'Collected', at: Date.now() }],
-                    })
-                    toast({ kind: 'success', title: 'Collected', body: `${r.code} · pickup complete.` })
-                  }}>
-                    Scan & Collect
-                  </Button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {tab === 'queue' && (
-        <div className="nb-card p-6 max-w-xl space-y-4">
-          <h2 className="text-h5 font-bold">Pickup Queue</h2>
-          <p className="text-body-sm text-neutral-500">Spreads the rush across pickup windows.</p>
-          {[
-            ['#1', 'Rohit S. · NB-4399', 'Ready — counter'],
-            ['#2', 'Aarav S. · NB-4417', 'Arriving 7:05 PM · prep done'],
-            ['#3', 'Meera P. · NB-4420', 'Arriving 7:20 PM · packing'],
-          ].map(([pos, who, state]) => (
-            <div key={pos} className="flex items-center gap-4 rounded-xl bg-neutral-50 border border-neutral-200 p-4">
-              <span className="font-data text-h4 font-extrabold text-primary-600 w-10">{pos}</span>
-              <div className="flex-1">
-                <p className="text-body-sm font-semibold">{who}</p>
-                <p className="text-caption text-neutral-500">{state}</p>
-              </div>
-            </div>
-          ))}
-          <p className="text-body-sm font-semibold text-neutral-700">Estimated wait: 5 min · Position #3</p>
-          <div className="flex gap-2 flex-wrap">
-            {PICKUP_WINDOWS.map((w) => (
-              <span key={w} className="px-3 py-1.5 rounded-full bg-reservebg text-[#6D28D9] text-caption font-semibold">
-                {w}
-              </span>
-            ))}
-          </div>
-        </div>
+      ) : (
+        <HubEmpty
+          title="No reservations right now"
+          body="Customers can reserve items from your store and pick them up at a time that suits them."
+        />
       )}
     </div>
   )

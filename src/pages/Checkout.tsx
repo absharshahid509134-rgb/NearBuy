@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
-import { CheckCircle2 } from 'lucide-react'
+import { Bike, CheckCircle2, PackageCheck, ShoppingBag, Store as StoreIcon } from 'lucide-react'
 import { CUSTOMER_LOCATION, PICKUP_WINDOWS } from '../data/catalog'
-import type { FulfillmentType, Order, Reservation } from '../data/types'
 import { getProduct, getStore, storeDistance } from '../lib/geo'
+import { api } from '../auth/api'
+import { orderFromApi, reservationFromApi, type ApiOrder, type ApiReservation } from '../store/serverCommerce'
 import { formatINR, formatKm } from '../lib/format'
 import { OptionRow, ProductVisual } from '../components/commerce'
 import { Button, Input, SectionHeading } from '../components/ui'
@@ -14,13 +15,17 @@ export default function Checkout() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const { cart, placeOrder, placeReservation, clearCart, toast } = useApp()
+  const requestedMode = params.get('mode')
   const [mode, setMode] = useState<'delivery' | 'pickup' | 'reserve'>(
-    (params.get('mode') as 'pickup' | 'delivery' | 'reserve') ?? 'delivery',
+    requestedMode === 'pickup' || requestedMode === 'reserve' ? requestedMode : 'delivery',
   )
   const [windowStr, setWindowStr] = useState(PICKUP_WINDOWS[1])
   const [pay, setPay] = useState<'upi' | 'card' | 'cod'>('upi')
   const [address, setAddress] = useState('H-14, Sector 22, Dwarka, Delhi — 110077')
-  const [placed, setPlaced] = useState<null | { kind: 'order'; id: string; code?: string }>(null)
+  const [placed, setPlaced] = useState<null | { ids: string[]; code?: string; serverId?: string }>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const submitting = useRef(false)
 
   const groups = useMemo(() => {
     const map = new Map<string, typeof cart>()
@@ -37,44 +42,56 @@ export default function Checkout() {
   }, [cart])
 
   const subtotal = cart.reduce((s, l) => s + l.price * l.qty, 0)
-  const fee = mode === 'delivery' ? 30 : 0
+  const fee = mode === 'delivery' ? 30 * groups.length : 0
   const total = subtotal + fee
+  const canDeliver = groups.every((g) => g.store.localDelivery)
+  const canPickup = groups.every((g) => g.store.pickup)
+  const canReserve = groups.length === 1 && canPickup
+  useEffect(() => {
+    if (mode === 'reserve' && !canReserve) setMode(canDeliver ? 'delivery' : 'pickup')
+    if (mode === 'delivery' && !canDeliver && canPickup) setMode('pickup')
+    if (mode === 'pickup' && !canPickup && canDeliver) setMode('delivery')
+  }, [mode, canReserve, canPickup, canDeliver])
 
-  function place() {
-    const now = Date.now()
-    if (mode === 'reserve') {
-      const code = 'NB-' + Math.floor(4000 + Math.random() * 5000)
-      const res: Reservation = {
-        id: 'RSV-' + Math.floor(5500 + Math.random() * 400),
-        code,
-        items: cart.map((l) => ({ productId: l.productId, storeId: l.storeId, qty: l.qty, price: l.price })),
-        status: 'awaiting',
-        storeId: cart[0].storeId,
-        placedAt: now,
-        window: windowStr,
-        expiresAt: now + 3 * 3600e3,
-        timeline: [{ label: 'Requested', at: now }],
-      }
-      placeReservation(res)
-      setPlaced({ kind: 'order', id: res.id, code })
-    } else {
-      const order: Order = {
-        id: 'NB-' + Math.floor(10300 + Math.random() * 500),
-        items: cart.map((l) => ({ productId: l.productId, storeId: l.storeId, qty: l.qty, price: l.price })),
-        status: 'confirmed',
-        fulfillment: (mode === 'pickup' ? 'pickup' : 'local') as FulfillmentType,
-        total,
-        deliveryFee: fee,
-        placedAt: now,
-        etaMins: mode === 'pickup' ? undefined : 45,
-        courier: mode === 'pickup' ? undefined : 'Assigned shortly',
-        timeline: [{ label: 'Order Confirmed', at: now }],
-      }
-      placeOrder(order)
-      setPlaced({ kind: 'order', id: order.id })
+  async function place() {
+    if (submitting.current) return
+    if (mode === 'delivery' && !address.trim()) {
+      setError('Add a delivery address so the rider knows where to find you.')
+      return
     }
-    clearCart()
-    toast({ kind: 'success', title: mode === 'reserve' ? 'Reservation confirmed.' : 'Order confirmed.', body: 'Track it in Orders.' })
+    if (mode === 'reserve' && !canReserve) {
+      setError('Reserve & Pickup is available for one store at a time.')
+      return
+    }
+    submitting.current = true
+    setBusy(true)
+    setError('')
+    const items = cart.map(({ productId, storeId, qty }) => ({ productId, storeId, qty }))
+    try {
+      if (mode === 'reserve') {
+        const reservation = await api.post<ApiReservation>('/checkout/reservations', { items, pickupWindow: windowStr })
+        placeReservation(reservationFromApi(reservation))
+        setPlaced({ ids: [reservation.code], code: reservation.code, serverId: reservation.id })
+      } else {
+        const result = await api.post<{ orders: ApiOrder[] }>('/checkout/orders', {
+          items,
+          fulfillment: mode === 'pickup' ? 'NEARBY_PICKUP' : 'LOCAL_DELIVERY',
+          paymentMethod: mode === 'pickup' && pay === 'cod' ? 'PAY_AT_STORE' : pay.toUpperCase(),
+          ...(mode === 'delivery' ? { addressLine: address.trim() } : {}),
+        })
+        if (!result.orders.length) throw new Error('No order was created. Please try again.')
+        result.orders.forEach((order) => placeOrder(orderFromApi(order)))
+        setPlaced({ ids: result.orders.map((order) => order.number) })
+      }
+      clearCart()
+      window.scrollTo({ top: 0, behavior: 'instant' })
+      toast({ kind: 'success', title: mode === 'reserve' ? 'Reservation requested.' : 'Order placed.', body: 'Follow the latest status in your account.' })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not place your order. Please try again.')
+    } finally {
+      submitting.current = false
+      setBusy(false)
+    }
   }
 
   if (placed) {
@@ -84,30 +101,30 @@ export default function Checkout() {
           <CheckCircle2 size={48} className="text-success-500" />
         </div>
         <h1 className="text-m-h1 lg:text-h1">
-          {placed.code ? 'Reservation confirmed.' : 'Order confirmed.'}
+          {placed.code ? 'Reservation requested.' : placed.ids.length > 1 ? 'Orders placed.' : 'Order placed.'}
         </h1>
         {placed.code ? (
           <div className="nb-card p-6 bg-reservebg border-reserveborder space-y-4">
             <p className="text-body text-neutral-700">Your pickup code</p>
             <p className="text-h1 font-extrabold font-data text-[#6D28D9]">{placed.code}</p>
             <div className="inline-block bg-white p-3 rounded-lg border border-reserveborder">
-              <QRCodeSVG value={`nearbuy://pickup/${placed.id}/${placed.code}`} size={140} />
+              <QRCodeSVG value={`nearbuy://pickup/${placed.serverId}/${placed.code}`} size={140} />
             </div>
             <p className="text-body-sm text-neutral-600">
-              Pickup window <strong>{windowStr}</strong> · show this QR at the store
+              Pickup window <strong>{windowStr}</strong> · show this QR after the store confirms
             </p>
           </div>
         ) : (
           <p className="text-body text-neutral-600">
-            {mode === 'pickup' ? 'The store is packing it — pick up in ~15 minutes.' : 'Arriving in about 45 minutes.'}
+            {mode === 'pickup' ? 'The store will confirm and prepare it for collection.' : 'The store will prepare your order, then a rider will bring it to you.'}
           </p>
         )}
-        <p className="text-body-sm text-neutral-500">Reference {placed.id}</p>
+        <div className="text-body-sm text-neutral-500"><span>{placed.ids.length > 1 ? 'Your store references' : 'Reference'}</span><div className="mt-2 flex flex-wrap justify-center gap-2">{placed.ids.map((id) => <span key={id} className="px-3 py-1.5 rounded-full bg-primary-50 text-primary-700 font-data font-bold">{id}</span>)}</div></div>
         <div className="flex gap-3 justify-center">
           <Button size="lg" onClick={() => navigate(placed.code ? '/reservations' : '/orders')}>
             {placed.code ? 'My Reservations' : 'Track Order'}
           </Button>
-          <Button variant="secondary" size="lg" onClick={() => navigate('/')}>
+          <Button variant="secondary" size="lg" onClick={() => navigate('/customer')}>
             Keep shopping
           </Button>
         </div>
@@ -118,7 +135,7 @@ export default function Checkout() {
   if (!cart.length) {
     return (
       <div className="nb-container py-20 text-center space-y-4">
-        <p className="text-5xl">🛍️</p>
+        <div className="inline-grid place-items-center w-16 h-16 rounded-2xl bg-primary-50 text-primary-500"><ShoppingBag size={33} strokeWidth={1.5} /></div>
         <h1 className="text-h4 font-bold">Nothing to check out</h1>
         <Button onClick={() => navigate('/nearby-now')}>Find something nearby</Button>
       </div>
@@ -137,22 +154,25 @@ export default function Checkout() {
               <OptionRow
                 active={mode === 'delivery'}
                 onClick={() => setMode('delivery')}
-                title="🛵 Local Delivery"
-                sub={`~45 min · from ${groups[0]?.store.name ?? 'local stores'} · ${formatKm(storeDistance(groups[0]?.store ?? getStore('s1')))}`}
-                right="₹30"
+                disabled={!canDeliver}
+                title={<span className="inline-flex items-center gap-2"><Bike size={18} /> Local delivery</span>}
+                sub={canDeliver ? `Each store sends its own parcel · from ${groups[0]?.store.name ?? 'local stores'} · ${formatKm(storeDistance(groups[0]?.store ?? getStore('s1')))} away` : 'Not available for every store in this cart'}
+                right={formatINR(30 * groups.length)}
               />
               <OptionRow
                 active={mode === 'pickup'}
                 onClick={() => setMode('pickup')}
-                title="🏪 Pickup Today"
-                sub="Free · ready in ~15 min · show order at counter"
+                disabled={!canPickup}
+                title={<span className="inline-flex items-center gap-2"><StoreIcon size={18} /> Pickup today</span>}
+                sub={canPickup ? 'Free · each store confirms when it is ready' : 'Not available for every store in this cart'}
                 right="FREE"
               />
               <OptionRow
                 active={mode === 'reserve'}
                 onClick={() => setMode('reserve')}
-                title="📦 Reserve & Pickup"
-                sub="Book now, collect in your chosen window · QR pickup code"
+                disabled={!canReserve}
+                title={<span className="inline-flex items-center gap-2"><PackageCheck size={18} /> Reserve & Pickup</span>}
+                sub={canReserve ? 'Request a hold, collect in your chosen window with a QR code' : 'Reserve items from one store at a time'}
                 right="FREE"
                 accent="#7C3AED"
               />
@@ -187,7 +207,7 @@ export default function Checkout() {
 
           {/* stores in this order */}
           <section>
-            <SectionHeading title="Stores in this order" sub={`${groups.length} store(s) · combined where operationally feasible`} />
+            <SectionHeading title="Stores in your cart" sub={`${groups.length} ${groups.length === 1 ? 'store' : 'stores'} · each store prepares its own items`} />
             <div className="space-y-3">
               {groups.map((g) => (
                 <div key={g.store.id} className="nb-card p-4">
@@ -207,18 +227,16 @@ export default function Checkout() {
             </div>
           </section>
 
-          {/* payment */}
-          <section>
+          {/* Reservations are holds, not a card payment. Preview checkout never charges. */}
+          {mode === 'reserve' ? <p className="rounded-lg border border-reserveborder bg-reservebg p-4 text-body-sm text-[#6D28D9]">No payment now. The store will confirm your hold before you visit.</p> : <section>
             <SectionHeading title="Payment" />
             <div className="space-y-2.5">
               <OptionRow active={pay === 'upi'} onClick={() => setPay('upi')} title="UPI" sub="GPay / PhonePe / Paytm" />
               <OptionRow active={pay === 'card'} onClick={() => setPay('card')} title="Card" sub="Visa · Mastercard · RuPay" />
               <OptionRow active={pay === 'cod'} onClick={() => setPay('cod')} title="Pay on pickup / delivery" sub="Cash or UPI at handover" />
             </div>
-            <p className="text-caption text-neutral-400 mt-3">
-              Payments are held in escrow until fulfilment confirmation (demo — no real charge).
-            </p>
-          </section>
+            {__NEARBUY_PREVIEW__ && <p className="text-caption text-neutral-500 mt-3">Preview only — no payment is taken. Choose how you would pay at checkout.</p>}
+          </section> }
         </div>
 
         {/* summary */}
@@ -229,22 +247,23 @@ export default function Checkout() {
             <span className="font-data font-semibold">{formatINR(subtotal)}</span>
           </div>
           <div className="flex justify-between text-body-sm">
-            <span className="text-neutral-500">{mode === 'delivery' ? 'Local delivery' : 'Pickup'}</span>
+            <span className="text-neutral-500">{mode === 'delivery' ? `Local delivery × ${groups.length}` : 'Pickup'}</span>
             <span className={`font-data font-semibold ${fee ? '' : 'text-success-600'}`}>
               {fee ? formatINR(fee) : 'FREE'}
             </span>
           </div>
           <div className="flex justify-between text-h5 pt-2 border-t border-neutral-100">
-            <span>Total</span>
+            <span>{mode === 'reserve' ? 'Estimated value' : 'Total'}</span>
             <span className="font-data">{formatINR(total)}</span>
           </div>
-          <Button size="xl" className="w-full mt-2" onClick={place}>
-            {mode === 'reserve' ? 'Confirm Reservation' : 'Place Order'}
+          {error && <p role="alert" className="rounded-lg border border-error-200 bg-error-50 px-3 py-2 text-body-sm text-error-700">{error}</p>}
+          <Button size="xl" className="w-full mt-2" disabled={busy || (!canPickup && !canDeliver)} loading={busy} onClick={() => void place()}>
+            {busy ? 'Placing your request…' : mode === 'reserve' ? 'Request Reservation' : groups.length > 1 ? 'Place Orders' : 'Place Order'}
           </Button>
           <p className="text-caption text-neutral-400 text-center">
             {mode === 'reserve'
-              ? 'The store confirms within minutes. You get a QR pickup code.'
-              : 'Free cancellation before the seller starts preparing.'}
+              ? 'The store will confirm your request before your pickup window.'
+              : 'Cancel before the seller starts preparing.'}
           </p>
         </aside>
       </div>

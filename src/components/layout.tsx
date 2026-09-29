@@ -14,31 +14,27 @@ import {
   ShoppingBag,
   Store as StoreIcon,
   Truck,
+  TrendingUp,
+  CircleHelp,
   User,
 } from 'lucide-react'
 import { useApp } from '../store/AppContext'
 import { LocationChip, ToastHost } from './ui'
 import { CUSTOMER_LOCATION } from '../data/catalog'
+import { Brand } from './Brand'
+import { SignOutButton } from './SignOutButton'
+import { useAuth } from '../auth/AuthContext'
+import { homeForUser } from '../auth/portals'
+import { useSeller } from '../seller/SellerContext'
 
 export function Logo({ light = false, compact = false }: { light?: boolean; compact?: boolean }) {
-  return (
-    <Link to="/" className="flex items-center gap-2 group" aria-label="NearBuy home">
-      <span className="w-9 h-9 rounded-lg bg-primary-500 flex items-center justify-center shadow-soft">
-        <MapPin size={20} className="text-white" strokeWidth={2.4} />
-      </span>
-      {!compact && (
-        <span
-          className={`text-xl font-extrabold tracking-[-0.5px] ${light ? 'text-white' : 'text-neutral-900'}`}
-        >
-          NEAR<span className="text-primary-500">BUY</span>
-        </span>
-      )}
-    </Link>
-  )
+  const { user } = useAuth()
+  return <Brand light={light} compact={compact} to={user ? homeForUser(user) : '/'} />
 }
 
 /* ── Customer header (desktop) + mobile header ──────────── */
 const headerLinks = [
+  { to: '/customer', label: 'Shop' },
   { to: '/explore', label: 'Categories' },
   { to: '/nearby', label: 'Nearby' },
   { to: '/deals', label: 'Deals' },
@@ -118,14 +114,13 @@ export function CustomerHeader() {
 
       {/* mobile header */}
       <div className="lg:hidden h-16 flex items-center gap-3 px-4">
-        <Logo />
-        <div className="flex-1">
+        <span className="customer-mobile-brand"><Logo /></span>
+        <div className="flex-1 min-w-0 customer-mobile-location">
           <LocationChip label={CUSTOMER_LOCATION.label} />
         </div>
-        <button className="w-11 h-11 flex items-center justify-center text-neutral-600 relative" aria-label="Notifications">
+        <Link to="/orders" className="w-11 h-11 flex items-center justify-center text-neutral-600 relative" aria-label="Orders and updates">
           <Bell size={22} />
-          <span className="absolute top-2 right-2 w-2 h-2 bg-deal rounded-full" />
-        </button>
+        </Link>
         <NavLink to="/account" className="w-11 h-11 flex items-center justify-center text-neutral-600" aria-label="Profile">
           <User size={22} />
         </NavLink>
@@ -136,7 +131,7 @@ export function CustomerHeader() {
 
 /* ── Mobile bottom nav ──────────────────────────────────── */
 const bottomNav = [
-  { to: '/', icon: Home, label: 'Home' },
+  { to: '/customer', icon: Home, label: 'Home' },
   { to: '/search', icon: Search, label: 'Search' },
   { to: '/nearby', icon: MapPin, label: 'Nearby' },
   { to: '/orders', icon: Package, label: 'Orders' },
@@ -149,7 +144,7 @@ export function BottomNav() {
     <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-neutral-200 pb-[env(safe-area-inset-bottom)]">
       <div className="grid grid-cols-5 h-[76px]">
         {bottomNav.map(({ to, icon: Icon, label }) => {
-          const active = to === '/' ? pathname === '/' : pathname.startsWith(to)
+          const active = pathname === to || pathname.startsWith(`${to}/`)
           return (
             <Link key={to} to={to} className="flex flex-col items-center justify-center gap-1 min-h-touch">
               <span
@@ -182,35 +177,36 @@ const footerCols = [
     ],
   },
   {
-    title: 'For Businesses',
+    title: 'Your space',
     links: [
-      ['Become a Seller', '/seller'],
-      ['Seller Dashboard', '/seller'],
-      ['Business Tools', '/seller/inventory'],
+      ['Orders', '/orders'],
+      ['Wishlist', '/wishlist'],
+      ['Your cart', '/cart'],
+      ['Your account', '/account'],
     ],
   },
   {
-    title: 'For Delivery Partners',
+    title: 'Sell locally',
     links: [
-      ['Join NearBuy', '/account'],
-      ['Driver Login', '/account'],
+      ['Seller sign in', '/login/seller'],
+      ['Bring your store online', '/join/seller'],
+      ['Local makers', '/local-market'],
     ],
   },
   {
-    title: 'Company',
+    title: 'Deliver locally',
     links: [
-      ['About', '/account'],
-      ['Careers', '/account'],
-      ['Contact', '/account'],
+      ['Rider sign in', '/login/rider'],
+      ['Become a rider', '/join/rider'],
     ],
   },
   {
-    title: 'Help',
+    title: 'Discover',
     links: [
-      ['Support', '/account'],
-      ['Returns', '/orders'],
-      ['Privacy', '/account'],
-      ['Terms', '/account'],
+      ['Explore categories', '/explore'],
+      ['Nearby stores', '/stores'],
+      ['Ask NearAI', '/nearai'],
+      ['Track orders', '/orders'],
     ],
   },
 ]
@@ -247,11 +243,12 @@ export function Footer() {
       </div>
       {/* compact mobile footer */}
       <div className="md:hidden px-4 py-6 flex flex-wrap gap-x-4 gap-y-2 text-caption text-neutral-300">
-        <Link to="/account">About</Link>
-        <Link to="/account">Help</Link>
-        <Link to="/account">Terms</Link>
-        <Link to="/account">Privacy</Link>
-        <Link to="/seller">Become a Seller</Link>
+        <Link to="/stores">Stores</Link>
+        <Link to="/orders">Orders</Link>
+        <Link to="/reservations">Pickups</Link>
+        <Link to="/account">Your account</Link>
+        <Link to="/login/seller">Seller Hub</Link>
+        <Link to="/login/rider">Rider Hub</Link>
         <span className="w-full text-neutral-500 mt-2">© 2026 NearBuy</span>
       </div>
     </footer>
@@ -271,83 +268,31 @@ export function CustomerShell({ children }: { children: React.ReactNode }) {
   )
 }
 
-/* ── Seller shell ───────────────────────────────────────── */
+/* ── Seller shell: a private workspace, never a shortcut into other roles ── */
 const sellerNav = [
-  { to: '/seller', icon: LayoutDashboard, label: 'Dashboard', end: true },
-  { to: '/seller/orders', icon: Package, label: 'Orders' },
-  { to: '/seller/inventory', icon: ShoppingBag, label: 'Inventory' },
-  { to: '/seller/growth', icon: Truck, label: 'Growth' },
+  { to: '/seller', icon: LayoutDashboard, label: 'Overview', end: true },
+  { to: '/seller/orders', icon: Package, label: 'Orders', end: false },
+  { to: '/seller/inventory', icon: ShoppingBag, label: 'Inventory', end: false },
+  { to: '/seller/growth', icon: TrendingUp, label: 'Insights', end: false },
+  { to: '/seller/account', icon: User, label: 'Account', end: false },
 ]
 
 export function SellerShell({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
+  const { profile } = useSeller()
+  const store = profile?.stores[0]
   return (
-    <div className="min-h-screen flex bg-neutral-50">
-      <aside className="hidden lg:flex flex-col w-60 bg-white border-r border-neutral-200 sticky top-0 h-screen">
-        <div className="h-[72px] flex items-center px-5 border-b border-neutral-200">
-          <Logo />
-        </div>
-        <nav className="p-3 space-y-1">
-          {sellerNav.map(({ to, icon: Icon, label, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                `flex items-center gap-3 h-11 px-4 rounded-md text-body-sm font-semibold transition-colors duration-fast border-l-4 ${
-                  isActive
-                    ? 'bg-primary-50 text-primary-600 border-primary-500'
-                    : 'text-neutral-600 hover:bg-neutral-50 border-transparent'
-                }`
-              }
-            >
-              <Icon size={20} />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="mt-auto p-4 space-y-2 border-t border-neutral-200">
-          <Link to="/" className="text-body-sm text-neutral-500 hover:text-primary-500 block min-h-touch flex items-center">
-            ← Customer app
-          </Link>
-          <Link to="/admin" className="text-body-sm text-neutral-500 hover:text-primary-500 block min-h-touch flex items-center">
-            Admin console
-          </Link>
-        </div>
+    <div className="hub-shell seller-shell">
+      <aside className="hub-sidebar seller-sidebar">
+        <div className="hub-sidebar-brand"><Brand to="/seller" /><span className="hub-sidebar-tag">SELLER HUB</span></div>
+        <p className="hub-sidebar-section">YOUR WORKSPACE</p>
+        <nav aria-label="Seller navigation">{sellerNav.map(({ to, icon: Icon, label, end }) => <NavLink key={to} to={to} end={end} className={({ isActive }) => `hub-side-link ${isActive ? 'active' : ''}`}><Icon size={19} /><span>{label}</span></NavLink>)}</nav>
+        <div className="hub-sidebar-bottom"><div className="hub-sidebar-help"><CircleHelp size={18} /><strong>Made for local.</strong><p>Everything your shop needs to serve the neighbourhood better.</p></div><SignOutButton className="hub-side-logout" /></div>
       </aside>
-      <div className="flex-1 min-w-0">
-        <header className="sticky top-0 z-30 bg-white border-b border-neutral-200 h-16 lg:h-[72px] flex items-center gap-4 px-4 lg:px-8">
-          <div className="lg:hidden">
-            <Logo compact />
-          </div>
-          <div className="font-semibold text-body-sm lg:text-body truncate">
-            <span className="hidden lg:inline">Seller · </span>ABC Sports
-            <span className="ml-2 text-caption text-success-600 bg-success-50 px-2 py-0.5 rounded-full">
-              Verified
-            </span>
-          </div>
-          <div className="ml-auto flex items-center gap-3">
-            <LocationChip label="Sector 22 Market" />
-            <div className="w-10 h-10 rounded-full bg-primary-100 text-primary-700 font-bold flex items-center justify-center">
-              A
-            </div>
-          </div>
-        </header>
-        <div className="p-4 lg:p-8 pb-28 lg:pb-8">{children}</div>
-        {/* seller mobile nav */}
-        <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-neutral-200 grid grid-cols-4 h-[72px]">
-          {sellerNav.map(({ to, icon: Icon, label, end }) => (
-            <NavLink key={to} to={to} end={end} className="flex flex-col items-center justify-center gap-1 min-h-touch">
-              {({ isActive }) => (
-                <>
-                  <Icon size={22} className={isActive ? 'text-primary-500' : 'text-neutral-500'} />
-                  <span className={`text-[11px] font-semibold ${isActive ? 'text-primary-500' : 'text-neutral-500'}`}>
-                    {label}
-                  </span>
-                </>
-              )}
-            </NavLink>
-          ))}
-        </nav>
+      <div className="hub-main">
+        <header className="hub-topbar"><div className="hub-topbar-mobile-brand"><Brand to="/seller" compact /><strong>Seller Hub</strong></div><div className="hub-topbar-title"><span className="hub-topbar-category">NEARBUY / SELLER HUB</span><strong>{store?.name || 'Set up your store'}</strong></div><div className="hub-topbar-actions"><span className="hub-location"><MapPin size={15} /> {store?.area || 'Your neighbourhood'}</span>{store && <span className={`hub-online-pill ${store.verified ? '' : 'offline'}`}><span />{store.verified ? 'Verified store' : 'New store'}</span>}<Link to="/seller/account" className="hub-avatar" aria-label="Store and account settings">{user?.name.charAt(0) || 'S'}</Link></div></header>
+        <main className="hub-main-content">{children}</main>
+        <nav className="hub-mobile-nav" aria-label="Seller navigation">{sellerNav.map(({ to, icon: Icon, label, end }) => <NavLink key={to} to={to} end={end} className={({ isActive }) => isActive ? 'active' : ''}><Icon size={20} /><span>{label}</span></NavLink>)}</nav>
       </div>
       <ToastHost />
     </div>
@@ -388,9 +333,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <div className="mt-auto p-4 border-t border-neutral-700">
-          <Link to="/" className="text-body-sm text-neutral-400 hover:text-white block min-h-touch flex items-center">
-            ← Customer app
-          </Link>
+          <SignOutButton className="flex items-center gap-2 text-body-sm text-neutral-300 hover:text-white min-h-touch" />
         </div>
       </aside>
       <div className="flex-1 min-w-0">

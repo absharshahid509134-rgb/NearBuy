@@ -1,268 +1,208 @@
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowRight, Package, QrCode, TrendingUp } from 'lucide-react'
-import { LISTINGS, PRODUCTS, SEED_ORDERS, SEED_RESERVATIONS, DEMAND_SIGNALS, SELLER_AI_PROMPTS } from '../../data/catalog'
-import { getProduct } from '../../lib/geo'
-import { formatINR } from '../../lib/format'
-import { Alert, Button, SectionHeading, StatCard, StatusBadge } from '../../components/ui'
-import { sellerAiReply, aiMessage } from '../../lib/nearai'
-import { useState } from 'react'
-import type { ChatMessage } from '../../data/types'
-
-const SELLER_ID = 's1'
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Boxes,
+  Check,
+  ChevronRight,
+  Clock3,
+  Package,
+  ShoppingBag,
+  Sparkles,
+  Store,
+  TrendingUp,
+} from 'lucide-react'
+import { useAuth } from '../../auth/AuthContext'
+import { useSeller } from '../../seller/SellerContext'
+import { HubEmpty, HubError, HubLoading, rupees, StatusPill, when } from '../../seller/components'
 
 export default function SellerDashboard() {
-  const inv = LISTINGS.filter((l) => l.storeId === SELLER_ID)
-  const lowStock = inv.filter((l) => l.stock > 0 && l.stock <= 4)
-  const outOfStock = PRODUCTS.filter((p) => !inv.some((l) => l.productId === p.id))
-  const awaiting = SEED_RESERVATIONS.filter((r) => r.status === 'awaiting')
-  const active = SEED_ORDERS.filter((o) => ['confirmed', 'preparing', 'out_for_delivery'].includes(o.status))
-  const [msgs, setMsgs] = useState<ChatMessage[]>([
-    aiMessage({
-      role: 'ai',
-      text: "Namaste! I'm your store assistant. Ask me to add stock, flag reorders, or create an offer — in plain language.",
-    }),
-  ])
-  const [input, setInput] = useState('')
-
-  function send(text: string) {
-    if (!text.trim()) return
-    setMsgs((m) => [...m, aiMessage({ role: 'user', text })])
-    setInput('')
-    setTimeout(() => setMsgs((m) => [...m, aiMessage(sellerAiReply(text, SELLER_ID))]), 400)
-  }
-
-  // simple weekly sparkline (hand-rolled SVG)
-  const week = [12, 18, 14, 22, 28, 25, 31]
+  const { user } = useAuth()
+  const { profile, orders, reservations, inventory, stockRequests, loading, error, refresh } = useSeller()
+  if (loading && !profile) return <HubLoading />
+  if (error) return <HubError message={error} retry={() => void refresh()} />
+  const store = profile?.stores[0]
+  const pending = orders.filter((o) =>
+    ['PENDING', 'CONFIRMED', 'PREPARING', 'PACKED', 'READY_FOR_PICKUP'].includes(o.status),
+  )
+  const requests = reservations.filter((r) => r.status === 'REQUESTED')
+  const available = inventory.filter((item) => item.availableQuantity > 0)
+  const low = inventory.filter((item) => item.availableQuantity > 0 && item.availableQuantity <= 4)
+  const sales = orders
+    .filter((o) => o.status === 'COMPLETED')
+    .reduce((sum, order) => sum + Number(order.total), 0)
+  const firstName = user?.name.split(' ')[0] || 'there'
+  const greeting =
+    new Date().getHours() < 12
+      ? 'Good morning'
+      : new Date().getHours() < 17
+        ? 'Good afternoon'
+        : 'Good evening'
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="hub-page">
+      <div className="hub-welcome hub-welcome-seller">
         <div>
-          <h1 className="text-m-h2 lg:text-h2 font-bold">Dashboard</h1>
-          <p className="text-body-sm text-neutral-500 mt-1">ABC Sports · Sector 22 Market, Dwarka</p>
-        </div>
-        <div className="flex gap-2">
-          <Link
-            to="/seller/inventory"
-            className="inline-flex items-center justify-center gap-2 font-semibold transition-colors duration-fast min-h-touch h-11 px-4 text-[15px] rounded-md bg-white text-neutral-700 border border-neutral-300 hover:bg-neutral-50"
-          >
-            Add product
-          </Link>
-          <Button size="md" onClick={() => send('Create a weekend discount')}>
-            Create offer
-          </Button>
-        </div>
-      </div>
-
-      {/* metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Today's Orders" value={28} change="12.4%" hint="Compared with yesterday" />
-        <StatCard label="Reservations" value={SEED_RESERVATIONS.length + 5} hint="3 awaiting confirmation" accent="text-[#6D28D9]" />
-        <StatCard label="Revenue Today" value={formatINR(24860)} change="8.1%" hint="incl. pickups" accent="text-primary-600" />
-        <StatCard label="Pickup Queue" value={3} hint="≈ 5 min wait" accent="text-fast" />
-      </div>
-
-      {/* alerts */}
-      <div className="space-y-3">
-        {awaiting.length > 0 && (
-          <Alert kind="warning" title={`${awaiting.length} reservation(s) awaiting your confirmation`}>
-            Confirm within 10 minutes to keep your reservation-confirmation metric high.
-          </Alert>
-        )}
-        {lowStock.length > 0 && (
-          <Alert kind="warning" title={`${lowStock.length} product(s) almost out of stock`}>
-            Reorder suggestions ready based on this week's sales velocity.
-          </Alert>
-        )}
-      </div>
-
-      <div className="grid lg:grid-cols-3 gap-6 items-start">
-        {/* stock overview */}
-        <div className="nb-card p-5 lg:col-span-1">
-          <h2 className="text-h5 font-bold mb-4">Inventory health</h2>
-          <div className="flex gap-3 text-center">
-            {[
-              ['🟢', inv.filter((l) => l.stock > 4).length + 1275, 'In Stock'],
-              ['🟡', lowStock.length + 80, 'Low Stock'],
-              ['🔴', outOfStock.length + 20, 'Out of Stock'],
-            ].map(([e, n, label]) => (
-              <div key={label as string} className="flex-1 rounded-xl bg-neutral-50 p-3">
-                <p className="text-lg">{e as string}</p>
-                <p className="font-data text-h5 font-extrabold">{n as number}</p>
-                <p className="text-caption text-neutral-500">{label as string}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5 space-y-2">
-            <p className="text-caption font-bold text-neutral-400 uppercase tracking-wider">⚠ Reorder suggestions</p>
-            {lowStock.map((l) => (
-              <div key={l.productId} className="flex items-center gap-2 text-body-sm">
-                <span>{getProduct(l.productId).emoji}</span>
-                <span className="flex-1 truncate">{getProduct(l.productId).name}</span>
-                <StatusBadge kind="low">{l.stock} left</StatusBadge>
-              </div>
-            ))}
-          </div>
-          <Link to="/seller/inventory" className="nb-link text-body-sm mt-4 inline-block">
-            Full inventory →
-          </Link>
-        </div>
-
-        {/* orders + reservations */}
-        <div className="space-y-4 lg:col-span-1">
-          <div className="nb-card p-5">
-            <h2 className="text-h5 font-bold mb-3 flex items-center gap-2">
-              <Package size={18} /> Active orders
-            </h2>
-            {active.map((o) => (
-              <Link
-                key={o.id}
-                to="/seller/orders"
-                className="flex items-center gap-3 py-2.5 border-b border-neutral-100 last:border-0 min-h-touch"
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-body-sm font-semibold font-data">{o.id}</p>
-                  <p className="text-caption text-neutral-500 truncate">
-                    {getProduct(o.items[0].productId).name}
-                  </p>
-                </div>
-                <StatusBadge kind={o.status === 'out_for_delivery' ? 'ready' : 'stock'}>{o.status.replace('_', ' ')}</StatusBadge>
-              </Link>
-            ))}
-            <Link to="/seller/orders" className="nb-link text-body-sm mt-3 inline-block">
-              All orders →
+          <p className="hub-overline">
+            <span /> SELLER HUB / OVERVIEW
+          </p>
+          <h1>
+            {greeting}, {firstName}.
+          </h1>
+          <p>Here’s what’s happening at {store?.name ?? 'your store'} today.</p>
+          <div className="hub-welcome-links">
+            <Link to="/seller/orders">
+              Manage orders <ArrowRight size={16} />
+            </Link>
+            <Link to="/seller/inventory">
+              View inventory <ChevronRight size={16} />
             </Link>
           </div>
-          <div className="nb-card p-5 bg-reservebg border-reserveborder">
-            <h2 className="text-h5 font-bold mb-3 flex items-center gap-2 text-[#6D28D9]">
-              <QrCode size={18} /> Reservations
-            </h2>
-            {SEED_RESERVATIONS.slice(0, 3).map((r) => (
-              <div key={r.id} className="flex items-center gap-3 py-2.5 border-b border-reserveborder/60 last:border-0">
-                <div className="flex-1 min-w-0">
-                  <p className="text-body-sm font-semibold font-data">{r.code}</p>
-                  <p className="text-caption text-neutral-500">Window {r.window}</p>
-                </div>
-                <StatusBadge kind={r.status === 'ready' ? 'ready' : r.status === 'awaiting' ? 'low' : 'stock'}>
-                  {r.status}
-                </StatusBadge>
-              </div>
-            ))}
-          </div>
         </div>
-
-        {/* seller AI + weekly chart */}
-        <div className="space-y-4 lg:col-span-1">
-          <div className="nb-card p-5">
-            <h2 className="text-h5 font-bold mb-3">🤖 Seller AI Assistant</h2>
-            <div className="space-y-2 max-h-56 overflow-y-auto mb-3 pr-1">
-              {msgs.map((m) => (
-                <div
-                  key={m.id}
-                  className={`rounded-xl px-3.5 py-2.5 text-m-sm ${
-                    m.role === 'user'
-                      ? 'bg-primary-500 text-white ml-6 rounded-br-md'
-                      : 'bg-neutral-100 text-neutral-800 mr-6 rounded-bl-md'
-                  }`}
-                >
-                  <p className="whitespace-pre-line">{m.text}</p>
-                  {!!m.productIds?.length && (
-                    <div className="flex gap-1 mt-2 flex-wrap">
-                      {m.productIds.map((id) => (
-                        <span key={id} className="text-lg" title={getProduct(id).name}>
-                          {getProduct(id).emoji}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {SELLER_AI_PROMPTS.slice(1, 4).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => send(p)}
-                  className="px-2.5 h-8 rounded-full bg-white border border-neutral-200 text-caption text-neutral-600 hover:border-primary-300 min-h-touch"
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault()
-                send(input)
-              }}
-              className="flex gap-2"
-            >
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Add 12 footballs…"
-                className="flex-1 h-10 px-3 rounded-md border border-neutral-300 text-body-sm nb-focus"
-              />
-              <Button size="sm" type="submit">
-                Send
-              </Button>
-            </form>
-          </div>
-
-          <div className="nb-card p-5">
-            <h2 className="text-h5 font-bold mb-1 flex items-center gap-2">
-              <TrendingUp size={18} /> This week
-            </h2>
-            <p className="text-caption text-neutral-500 mb-3">Orders per day · 150 total</p>
-            <svg viewBox="0 0 280 90" className="w-full h-24">
-              <line x1="0" y1="80" x2="280" y2="80" stroke="#E2E8F0" />
-              <line x1="0" y1="45" x2="280" y2="45" stroke="#E2E8F0" strokeDasharray="3 3" />
-              {week.map((v, i) => (
-                <rect key={i} x={i * 40 + 12} y={80 - v * 2} width="18" height={v * 2} rx="4" fill={i === 6 ? '#2563EB' : '#93C5FD'} />
-              ))}
-            </svg>
-            <p className="text-caption text-neutral-500 mt-2">
-              Predictive: at the current sales rate, ~6 volleyball units may remain after 5 days (forecast, not a guarantee).
-            </p>
-          </div>
+        <div className="hub-welcome-mark" aria-hidden="true">
+          <Store size={90} strokeWidth={1.1} />
+          <span className="hub-welcome-orbit" />
         </div>
       </div>
 
-      {/* store health score */}
-      <div className="nb-card p-6">
-        <SectionHeading title="Store Health Score" sub="Individual operational metrics — shown clearly, not collapsed." />
-        <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-4">
-          {(
-            [
-              ['Inventory accuracy', 96],
-              ['Order acceptance', 98],
-              ['Reservation confirm', 95],
-              ['Preparation time', 92],
-              ['Cancellation rate', 97],
-              ['Customer satisfaction', 94],
-            ] as [string, number][]
-          ).map(([label, val]) => (
-            <div key={label}>
-              <p className="text-caption text-neutral-500">{label}</p>
-              <p className="font-data text-h4 font-extrabold mt-1">{val}%</p>
-              <div className="h-2 bg-neutral-100 rounded-full mt-1.5 overflow-hidden">
-                <div className="h-full bg-primary-500 rounded-full" style={{ width: `${val}%` }} />
-              </div>
-            </div>
-          ))}
+      <div className="hub-stats">
+        <div className="hub-stat">
+          <span className="hub-stat-icon blue">
+            <Package size={20} />
+          </span>
+          <p>Active orders</p>
+          <strong>{pending.length}</strong>
+          <small>To prepare or hand over</small>
+        </div>
+        <div className="hub-stat">
+          <span className="hub-stat-icon amber">
+            <Clock3 size={20} />
+          </span>
+          <p>New reservations</p>
+          <strong>{requests.length}</strong>
+          <small>Waiting for your reply</small>
+        </div>
+        <div className="hub-stat">
+          <span className="hub-stat-icon violet">
+            <Boxes size={20} />
+          </span>
+          <p>Products in stock</p>
+          <strong>{available.length}</strong>
+          <small>Ready for neighbours to find</small>
+        </div>
+        <div className="hub-stat">
+          <span className="hub-stat-icon green">
+            <TrendingUp size={20} />
+          </span>
+          <p>Completed sales</p>
+          <strong>{rupees(sales)}</strong>
+          <small>From your current order history</small>
         </div>
       </div>
 
-      {/* demand preview */}
-      <div className="nb-card p-6">
-        <SectionHeading title="📡 Demand nearby" sub="What customers search for around Dwarka — a preview of Demand Radar." action="Full radar" />
-        <div className="grid sm:grid-cols-3 gap-3">
-          {DEMAND_SIGNALS.slice(0, 3).map((d) => (
-            <div key={d.query} className="rounded-xl bg-neutral-50 border border-neutral-200 p-4">
-              <p className="text-body font-semibold">{d.query}</p>
-              <p className="font-data text-h5 font-extrabold mt-1">{d.searches} searches</p>
-              <p className="text-caption text-warning-700 mt-1">Nearby availability: {d.availability}</p>
+      <div className="hub-columns">
+        <div className="hub-panel">
+          <div className="hub-panel-heading">
+            <div>
+              <p className="hub-panel-eyebrow">YOUR ACTIVITY</p>
+              <h2>Recent orders</h2>
             </div>
-          ))}
+            <Link to="/seller/orders">
+              View all <ArrowUpRight size={16} />
+            </Link>
+          </div>
+          {orders.length ? (
+            <div className="hub-order-list">
+              {orders.slice(0, 4).map((order) => (
+                <div className="hub-order-row" key={order.id}>
+                  <span className="hub-order-avatar">
+                    <ShoppingBag size={19} />
+                  </span>
+                  <div className="hub-order-info">
+                    <strong>{order.number}</strong>
+                    <small>
+                      {order.items.map((i) => `${i.qty}× ${i.name}`).join(', ') || 'Store order'} ·{' '}
+                      {when(order.createdAt)}
+                    </small>
+                  </div>
+                  <div className="hub-order-side">
+                    <strong>{rupees(order.total)}</strong>
+                    <StatusPill status={order.status} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <HubEmpty
+              title="Your first order is around the corner"
+              body="New orders will appear here as your neighbours find your store."
+            />
+          )}
+        </div>
+        <div className="hub-aside-stack">
+          <div className="hub-panel hub-next">
+            <div className="hub-panel-heading">
+              <div>
+                <p className="hub-panel-eyebrow">A GOOD PLACE TO START</p>
+                <h2>Needs your attention</h2>
+              </div>
+              <Sparkles size={20} className="text-[#8b64c4]" />
+            </div>
+            <div className="hub-task-list">
+              {stockRequests.length > 0 && <Link to="/seller/inventory"><span className="hub-task-icon blue"><Boxes size={18} /></span><span><strong>{stockRequests.length} shelf check{stockRequests.length !== 1 ? 's' : ''} to answer</strong><small>Let neighbours know what is on hand</small></span><ChevronRight size={17} /></Link>}
+              <Link to="/seller/orders">
+                <span className="hub-task-icon amber">
+                  <Clock3 size={18} />
+                </span>
+                <span>
+                  <strong>
+                    {requests.length} reservation{requests.length !== 1 ? 's' : ''} to confirm
+                  </strong>
+                  <small>Keep pickup promises on track</small>
+                </span>
+                <ChevronRight size={17} />
+              </Link>
+              <Link to="/seller/orders">
+                <span className="hub-task-icon blue">
+                  <Package size={18} />
+                </span>
+                <span>
+                  <strong>
+                    {pending.length} order{pending.length !== 1 ? 's' : ''} in progress
+                  </strong>
+                  <small>Get them packed and ready</small>
+                </span>
+                <ChevronRight size={17} />
+              </Link>
+              <Link to="/seller/inventory">
+                <span className="hub-task-icon red">
+                  <Boxes size={18} />
+                </span>
+                <span>
+                  <strong>
+                    {low.length} low-stock item{low.length !== 1 ? 's' : ''}
+                  </strong>
+                  <small>Update before they sell out</small>
+                </span>
+                <ChevronRight size={17} />
+              </Link>
+            </div>
+          </div>
+          <div className="hub-store-panel">
+            <div className="hub-store-icon">
+              <Store size={23} />
+            </div>
+            <p>YOUR STORE</p>
+            <h3>{store?.name || 'Your neighbourhood store'}</h3>
+            <span>{store?.area || 'Your area'}</span>
+            <div className="hub-store-footer">
+              <span>
+                <Check size={14} /> {store?.verified ? 'Verified store' : 'Verification in progress'}
+              </span>
+              <span>{store?.open ? 'Open' : 'Closed'}</span>
+            </div>
+            <Link to="/seller/account" className="hub-store-manage">Manage store <ArrowRight size={15} /></Link>
+          </div>
         </div>
       </div>
     </div>

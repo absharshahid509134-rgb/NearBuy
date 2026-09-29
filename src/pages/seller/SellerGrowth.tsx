@@ -1,135 +1,122 @@
-import { DEMAND_SIGNALS, OFFERS, SEED_ORDERS } from '../../data/catalog'
-import { formatINR } from '../../lib/format'
-import { Button, SectionHeading, StatCard, StatusBadge } from '../../components/ui'
-import { useApp } from '../../store/AppContext'
+import { Link } from 'react-router-dom'
+import { ArrowRight, BadgeCheck, ChartNoAxesCombined, Package, Store, TrendingUp } from 'lucide-react'
+import { useSeller } from '../../seller/SellerContext'
+import { HubError, HubLoading, rupees } from '../../seller/components'
 
 export default function SellerGrowth() {
-  const { toast } = useApp()
-  const customers = [
-    { name: 'Rohit Sharma', kind: 'Frequent', orders: 12, spend: 18400 },
-    { name: 'Ananya Kapoor', kind: 'Returning', orders: 5, spend: 7200 },
-    { name: 'Meera Pillai', kind: 'New', orders: 1, spend: 649 },
-    { name: 'Dev Anand', kind: 'High-value', orders: 9, spend: 41200 },
-    { name: 'Kabir Tanwar', kind: 'Dormant', orders: 3, spend: 3100 },
-  ]
-
+  const { profile, orders, reservations, inventory, loading, error, refresh } = useSeller()
+  if (loading && !profile) return <HubLoading />
+  if (error) return <HubError message={error} retry={() => void refresh()} />
+  const completed = orders.filter((o) => o.status === 'COMPLETED')
+  const sales = completed.reduce((sum, order) => sum + Number(order.total), 0)
+  const inStock = inventory.filter((item) => item.availableQuantity > 0)
+  const coverage = inventory.length ? Math.round((inStock.length / inventory.length) * 100) : 0
+  const low = inventory.filter((item) => item.availableQuantity > 0 && item.availableQuantity <= 4)
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-m-h2 lg:text-h2 font-bold">Growth</h1>
-        <p className="text-body-sm text-neutral-500 mt-1">Analytics, promotions, CRM and demand — for a store without a website.</p>
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Revenue (7 days)" value={formatINR(168420)} change="9.6%" />
-        <StatCard label="Avg basket" value={formatINR(1123)} hint="incl. team orders" />
-        <StatCard label="Reservation → pickup" value="92%" hint="confirmation reliability" accent="text-[#6D28D9]" />
-        <StatCard label="New customers" value={34} change="18%" hint="found you via Nearby" accent="text-sky-600" />
-      </div>
-
-      {/* revenue chart */}
-      <div className="nb-card p-6">
-        <SectionHeading title="Revenue trend" sub="Daily revenue · last 14 days" />
-        <svg viewBox="0 0 560 140" className="w-full h-36">
-          {[30, 70, 110].map((y) => (
-            <line key={y} x1="0" y1={y} x2="560" y2={y} stroke="#E2E8F0" />
-          ))}
-          <path
-            d="M0,100 L40,90 L80,95 L120,70 L160,78 L200,60 L240,65 L280,48 L320,55 L360,40 L400,52 L440,36 L480,30 L520,22"
-            fill="none"
-            stroke="#2563EB"
-            strokeWidth="3"
-          />
-          <path
-            d="M0,100 L40,90 L80,95 L120,70 L160,78 L200,60 L240,65 L280,48 L320,55 L360,40 L400,52 L440,36 L480,30 L520,22 L520,140 L0,140 Z"
-            fill="#2563EB"
-            opacity="0.08"
-          />
-        </svg>
-      </div>
-
-      {/* marketing */}
-      <div className="nb-card p-6">
-        <SectionHeading title="🎯 Marketing" sub="Create offers targeted at nearby and returning customers." />
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {['Create Offer', 'Promote Product', 'Store Coupon', 'Flash Sale'].map((t) => (
-            <button
-              key={t}
-              onClick={() => toast({ kind: 'success', title: t, body: 'Set up in plain language via the AI assistant below.' })}
-              className="rounded-xl border-2 border-neutral-200 p-5 text-left hover:border-primary-300 transition-colors duration-fast min-h-touch"
-            >
-              <p className="text-body font-semibold">{t}</p>
-              <p className="text-caption text-neutral-500 mt-1">Target: nearby · returning · weekend shoppers</p>
-            </button>
-          ))}
+    <div className="hub-page">
+      <div className="hub-page-header">
+        <div>
+          <p className="hub-overline dark">SELLER HUB / INSIGHTS</p>
+          <h1>Grow your local reach</h1>
+          <p>A simple look at how your store is doing, based on your orders and shelves.</p>
         </div>
-        <div className="mt-5 space-y-2">
-          <p className="text-caption font-bold text-neutral-400 uppercase tracking-wider">Live offers</p>
-          {OFFERS.filter((o) => o.storeId === 's1' || o.kind === 'coupon').map((o) => (
-            <div key={o.id} className="flex items-center gap-3 rounded-xl bg-neutral-50 border border-neutral-200 p-3.5">
-              <StatusBadge kind="out">₹{o.savings} off</StatusBadge>
-              <p className="text-body-sm flex-1">{o.title}</p>
-              {o.endsIn && <p className="text-caption text-warning-700">⏳ {o.endsIn}</p>}
+      </div>
+      <div className="hub-welcome hub-welcome-growth">
+        <div>
+          <p className="hub-overline">
+            <span /> YOUR STORE, GOING PLACES
+          </p>
+          <h2>
+            Small improvements.
+            <br />A bigger neighbourhood.
+          </h2>
+          <p>
+            Keep your stock fresh and your pickup promises on time. The little things make people come back.
+          </p>
+        </div>
+        <ChartNoAxesCombined size={100} strokeWidth={1.2} className="hub-growth-art" />
+      </div>
+      <div className="hub-stats hub-stats-three">
+        <div className="hub-stat">
+          <span className="hub-stat-icon blue">
+            <Package size={20} />
+          </span>
+          <p>Total orders</p>
+          <strong>{orders.length}</strong>
+          <small>All recorded orders</small>
+        </div>
+        <div className="hub-stat">
+          <span className="hub-stat-icon green">
+            <TrendingUp size={20} />
+          </span>
+          <p>Completed sales</p>
+          <strong>{rupees(sales)}</strong>
+          <small>Across {completed.length} completed orders</small>
+        </div>
+        <div className="hub-stat">
+          <span className="hub-stat-icon violet">
+            <Store size={20} />
+          </span>
+          <p>Reservations</p>
+          <strong>{reservations.length}</strong>
+          <small>Pickup requests received</small>
+        </div>
+      </div>
+      <div className="hub-columns">
+        <div className="hub-panel hub-health">
+          <div className="hub-panel-heading">
+            <div>
+              <p className="hub-panel-eyebrow">STORE READINESS</p>
+              <h2>Make your shelves easy to find</h2>
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* CRM */}
-      <div className="nb-card p-6">
-        <SectionHeading title="👥 Customers" sub="Understand your customer base — aggregated and privacy-respecting." />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[520px] nb-table">
-            <thead>
-              <tr>
-                <th>Customer</th>
-                <th>Segment</th>
-                <th>Orders</th>
-                <th>Lifetime spend</th>
-              </tr>
-            </thead>
-            <tbody>
-              {customers.map((c) => (
-                <tr key={c.name}>
-                  <td className="font-semibold text-neutral-900">{c.name}</td>
-                  <td>
-                    <StatusBadge
-                      kind={
-                        c.kind === 'Dormant' ? 'closed' : c.kind === 'New' ? 'ready' : 'stock'
-                      }
-                    >
-                      {c.kind}
-                    </StatusBadge>
-                  </td>
-                  <td className="font-data">{c.orders}</td>
-                  <td className="font-data font-semibold">{formatINR(c.spend)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="text-caption text-neutral-400 mt-3">
-          Segments: New · Returning · Frequent · Dormant · High-value. Personal data minimised per privacy requirements.
-        </p>
-      </div>
-
-      {/* demand radar */}
-      <div className="nb-card p-6">
-        <SectionHeading title="📡 Demand Radar" sub="Where customers search but local supply is weak — your opportunity." />
-        <div className="grid sm:grid-cols-2 gap-3">
-          {DEMAND_SIGNALS.slice(0, 4).map((d) => (
-            <div key={d.query} className="rounded-xl bg-neutral-50 border border-neutral-200 p-4 flex items-center gap-3">
-              <div className="flex-1">
-                <p className="text-body-sm font-semibold">{d.query}</p>
-                <p className="text-caption text-neutral-500">
-                  {d.area} · {d.searches} searches · supply {d.availability}
-                </p>
-              </div>
-              <Button size="sm" variant="soft" onClick={() => toast({ kind: 'info', title: 'Stock it', body: `We'll help you list ${d.query.toLowerCase()}.` })}>
-                Stock it
-              </Button>
+          </div>
+          <p className="hub-health-intro">
+            Customers can only discover what you’ve marked in stock. Keeping quantities accurate is the best
+            way to earn their trust.
+          </p>
+          <div className="hub-health-bar">
+            <div>
+              <strong>{coverage}%</strong>
+              <span>of listed products available</span>
             </div>
-          ))}
+            <div className="hub-progress">
+              <span style={{ width: `${coverage}%` }} />
+            </div>
+          </div>
+          <div className="hub-health-detail">
+            <span>
+              <BadgeCheck size={17} /> {inStock.length} ready to sell
+            </span>
+            <span>{low.length} need a top-up</span>
+          </div>
+          <Link className="hub-health-link" to="/seller/inventory">
+            Review inventory <ArrowRight size={16} />
+          </Link>
+        </div>
+        <div className="hub-panel hub-tip-panel">
+          <p className="hub-panel-eyebrow">YOUR NEXT MOVES</p>
+          <h2>Good habits grow good stores.</h2>
+          <div className="hub-tip">
+            <span>01</span>
+            <p>
+              <strong>Keep stock current</strong>
+              <small>Update quantities as soon as something changes in-store.</small>
+            </p>
+          </div>
+          <div className="hub-tip">
+            <span>02</span>
+            <p>
+              <strong>Reply to reservations</strong>
+              <small>Customers plan their visit around your confirmation.</small>
+            </p>
+          </div>
+          <div className="hub-tip">
+            <span>03</span>
+            <p>
+              <strong>Pack with care</strong>
+              <small>Give every order the kind of service your shop is known for.</small>
+            </p>
+          </div>
         </div>
       </div>
     </div>

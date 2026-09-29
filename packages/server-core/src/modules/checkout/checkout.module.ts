@@ -65,13 +65,15 @@ export class CheckoutController {
       })
       discount = c.discount
     }
-    const fee = feeFor(body.fulfillment)
+    // Each store has its own fulfillment and order. Quote the same total that
+    // createOrders will charge, not a single fee for a multi-store cart.
+    const deliveryFee = groups.length * feeFor(body.fulfillment)
     return {
       groups: groups.map((g) => ({ storeId: g.storeId, storeName: g.storeName, subtotal: g.subtotal, items: g.items })),
       subtotal,
       discount,
-      deliveryFee: fee,
-      total: Math.max(0, subtotal - discount) + fee,
+      deliveryFee,
+      total: Math.max(0, subtotal - discount) + deliveryFee,
       fulfillment: body.fulfillment,
     }
   }
@@ -81,6 +83,18 @@ export class CheckoutController {
   async createOrders(@CurrentUser() user: AuthUser, @Body(new ZodValidationPipe(checkoutOrderSchema)) body: CheckoutOrderInput) {
     this.analytics.track({ name: 'checkout_started', userId: user.id, at: Date.now() })
     const groups = await this.priceGroups(body.items)
+    const delivering = ['LOCAL_DELIVERY', 'STANDARD_DELIVERY', 'FAST_DELIVERY'].includes(body.fulfillment)
+    const savedAddress = body.addressId
+      ? await this.prisma.address.findFirst({ where: { id: body.addressId, userId: user.id } })
+      : undefined
+    if (body.addressId && !savedAddress) throw Errors.notFound('Delivery address not found on your account.')
+    // The rider sees an address only after accepting the job. Always snapshot
+    // the buyer's destination onto each order instead of silently falling back
+    // to a generic city pin when a customer entered a real address.
+    const addressSnap = savedAddress
+      ? { line1: savedAddress.line1, line2: savedAddress.line2, area: savedAddress.area, city: savedAddress.city, pincode: savedAddress.pincode }
+      : body.addressLine ? { line1: body.addressLine, area: 'Dwarka', city: 'Delhi' } : null
+    if (delivering && !addressSnap) throw Errors.badRequest('Add a delivery address before placing your order.')
     const created = []
     for (const group of groups) {
       const order = await this.prisma.$transaction(async (tx) => {
@@ -114,6 +128,8 @@ export class CheckoutController {
             discount,
             total,
             couponCode: body.couponCode,
+            addressId: savedAddress?.id,
+            addressSnap: addressSnap ?? undefined,
             events: [{ label: 'Order Confirmed', at: new Date().toISOString() }],
             items: {
               create: holds.map((h) => ({
