@@ -39,14 +39,14 @@ export class OrdersController {
       const stores = await this.prisma.store.findMany({ where: { seller: { userId: user.id } }, select: { id: true } })
       return this.prisma.order.findMany({
         where: { storeId: { in: stores.map((s) => s.id) }, ...(status ? { status: status as OrderStatus } : {}) },
-        include: { items: true, fulfillment: true, payment: true, user: { select: { name: true, phone: true } } },
+        include: { items: true, fulfillment: true, payment: true, delivery: { select: { status: true, pickupCode: true } }, user: { select: { name: true, phone: true } } },
         orderBy: { createdAt: 'desc' },
         take: 50,
       })
     }
     return this.prisma.order.findMany({
       where: { userId: user.id, ...(status ? { status: status as OrderStatus } : {}) },
-      include: { items: true, fulfillment: true, payment: true, store: { select: { name: true, slug: true, area: true } } },
+      include: { items: true, fulfillment: true, payment: true, delivery: { select: { status: true, dropCode: true, partner: { select: { user: { select: { name: true } } } } } }, store: { select: { name: true, slug: true, area: true } } },
       orderBy: { createdAt: 'desc' },
       take: 50,
     })
@@ -67,7 +67,17 @@ export class OrdersController {
     })
     if (!order) throw Errors.notFound('Order not found.')
     await this.assertAccess(user, order)
-    return order
+    // The pickup code belongs at the store, the drop code belongs with the
+    // customer. A seller must never see the customer's delivery secret.
+    const admin = ['ADMIN', 'SUPER_ADMIN'].includes(user.role)
+    return {
+      ...order,
+      delivery: order.delivery ? {
+        ...order.delivery,
+        pickupCode: admin || order.userId !== user.id ? order.delivery.pickupCode : undefined,
+        dropCode: admin || order.userId === user.id ? order.delivery.dropCode : undefined,
+      } : null,
+    }
   }
 
   /** Tracking view — timeline + delivery events + live ETA. */
@@ -143,6 +153,9 @@ export class OrdersController {
     }
     if (!spec.from.includes(order.status)) {
       throw Errors.invalidTransition(`Cannot ${action} an order in status ${order.status}.`)
+    }
+    if (action === 'complete' && !['NEARBY_PICKUP', 'RESERVE_AND_PICKUP'].includes(order.fulfillmentMethod)) {
+      throw Errors.invalidTransition('The rider completes a delivery order after the customer handoff.')
     }
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.order.update({

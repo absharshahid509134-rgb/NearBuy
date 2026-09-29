@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Heart, ShoppingCart } from 'lucide-react'
 import { PICKUP_WINDOWS, REVIEWS } from '../data/catalog'
@@ -30,28 +30,32 @@ import {
   VerifiedBadge,
 } from '../components/ui'
 import { useApp } from '../store/AppContext'
+import { api } from '../auth/api'
+import { reservationFromApi, type ApiReservation } from '../store/serverCommerce'
 
 export default function ProductPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const product = getProduct(id)
-  const { addToCart, wishlist, toggleWishlist, placeReservation, toast, liveChecks } = useApp()
+  const { addToCart, wishlist, toggleWishlist, placeReservation, toast } = useApp()
 
-  const listings = useMemo(() => listingsForProduct(id), [id])
-  const inStock = listings.filter((l) => l.stock > 0)
+  const listings = listingsForProduct(id)
+  const inStock = listings.filter((l) => l.stock > 0 && l.store.open)
   const preferredStore = params.get('store') ?? inStock[0]?.store.id
-  const listing = listings.find((l) => l.store.id === preferredStore) ?? inStock[0]
+  const listing = inStock.find((l) => l.store.id === preferredStore) ?? inStock[0]
 
   const [fulfillment, setFulfillment] = useState<FulfillmentType>(
     (params.get('action') === 'reserve' ? 'reserve' : 'local') as FulfillmentType,
   )
   const [qty, setQty] = useState(1)
   const [windowStr, setWindowStr] = useState(PICKUP_WINDOWS[1])
-  const options: FulfillmentOption[] = useMemo(
-    () => buildFulfillmentOptions(product, listing ? { store: listing.store, distance: listing.distance } : undefined),
-    [product, listing],
-  )
+  const [reserving, setReserving] = useState(false)
+  const [reserveError, setReserveError] = useState('')
+  const submitting = useRef(false)
+  const options: FulfillmentOption[] = product
+    ? buildFulfillmentOptions(product, listing ? { store: listing.store, distance: listing.distance, reserveable: listing.reserveable } : undefined)
+    : []
 
   useEffect(() => {
     if (params.get('action') === 'reserve') setFulfillment('reserve')
@@ -64,27 +68,25 @@ export default function ProductPage() {
   const reviews = REVIEWS.filter((r) => listing && r.storeId === listing.store.id).slice(0, 3)
   const found = foundNearby(id)
 
-  function onPrimary() {
-    if (!listing) return
+  async function onPrimary() {
+    if (!listing || submitting.current) return
     if (fulfillment === 'reserve') {
-      const code = 'NB-' + Math.floor(4000 + Math.random() * 5000)
-      placeReservation({
-        id: 'RSV-' + Math.floor(5500 + Math.random() * 400),
-        code,
-        items: [{ productId: id, storeId: listing.store.id, qty, price: listing.price }],
-        status: 'awaiting',
-        storeId: listing.store.id,
-        placedAt: Date.now(),
-        window: windowStr,
-        expiresAt: Date.now() + 3 * 3600e3,
-        timeline: [{ label: 'Requested', at: Date.now() }],
-      })
-      toast({
-        kind: 'success',
-        title: 'Reservation requested',
-        body: `Waiting for ${listing.store.name} confirmation.`,
-      })
-      navigate('/reservations')
+      submitting.current = true
+      setReserving(true)
+      setReserveError('')
+      try {
+        const reservation = await api.post<ApiReservation>('/checkout/reservations', {
+          items: [{ productId: id, storeId: listing.store.id, qty }], pickupWindow: windowStr,
+        })
+        placeReservation(reservationFromApi(reservation))
+        toast({ kind: 'success', title: 'Reservation requested', body: `Waiting for ${listing.store.name} to confirm.` })
+        navigate('/reservations')
+      } catch (cause) {
+        setReserveError(cause instanceof Error ? cause.message : 'Could not request your reservation.')
+      } finally {
+        submitting.current = false
+        setReserving(false)
+      }
     } else if (fulfillment === 'pickup') {
       addToCart({ productId: id, storeId: listing.store.id, qty, price: listing.price })
       navigate('/checkout?mode=pickup')
@@ -99,7 +101,7 @@ export default function ProductPage() {
     <div className="nb-container py-6 lg:py-10 space-y-8">
       {/* breadcrumb */}
       <nav className="text-body-sm text-neutral-500">
-        <Link to="/" className="hover:text-primary-500">Home</Link>
+        <Link to="/customer" className="hover:text-primary-500">Home</Link>
         {' / '}
         <Link to={`/search?q=${product.category}`} className="hover:text-primary-500 capitalize">{product.category}</Link>
         {' / '}
@@ -132,7 +134,7 @@ export default function ProductPage() {
               {product.brand} ·{' '}
               <span className="text-warning-500">★</span> {product.rating} ({product.ratingCount} ratings)
             </p>
-            <Price value={listing ? Math.min(listing.price, product.price) : product.price} mrp={product.mrp} size="page" className="mt-3" />
+            <Price value={listing?.price ?? product.price} mrp={product.mrp} size="page" className="mt-3" />
             {product.online && (
               <p className="text-body-sm text-neutral-500 mt-1">
                 Online {formatINR(product.online.price)} · arrives in {relativeDays(product.online.etaDaysMin, product.online.etaDaysMax)}
@@ -180,6 +182,7 @@ export default function ProductPage() {
           </section>
 
           {/* CTAs */}
+          {reserveError && <Alert kind="warning" title="Could not reserve this item">{reserveError}</Alert>}
           {listing ? (
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2 border border-neutral-300 rounded-md h-12 px-2">
@@ -192,11 +195,11 @@ export default function ProductPage() {
                 </button>
               </div>
               {fulfillment === 'reserve' ? (
-                <Button variant="reserve" size="xl" className="flex-1" onClick={onPrimary}>
-                  <ReserveBadge className="bg-white/20 text-white" /> Reserve & Pickup
+                <Button variant="reserve" size="xl" className="flex-1" onClick={() => void onPrimary()} disabled={reserving} loading={reserving}>
+                  <ReserveBadge className="bg-white/20 text-white" /> {reserving ? 'Requesting…' : 'Reserve & Pickup'}
                 </Button>
               ) : (
-                <Button size="xl" className="flex-1" onClick={onPrimary}>
+                <Button size="xl" className="flex-1" onClick={() => void onPrimary()}>
                   <ShoppingCart size={20} /> {fulfillment === 'pickup' ? 'Pickup Today' : 'Buy Now'}
                 </Button>
               )}
@@ -215,11 +218,7 @@ export default function ProductPage() {
             <div className="nb-card p-4">
               <p className="text-body-sm font-semibold mb-2">Availability confidence</p>
               <AvailabilityLine listing={{ ...listing, store: listing.store }} productId={id} />
-              {liveChecks[id] && (
-                <Alert kind="info" title="Store reply: Available" >
-                  {listing.store.name} confirmed 1 unit for you — reserved informally for 30 minutes.
-                </Alert>
-              )}
+
             </div>
           )}
         </div>

@@ -19,25 +19,23 @@ import {
   storeDistance,
 } from '../lib/geo'
 import { formatINR, formatKm } from '../lib/format'
-import {
-  CategoryTile,
-  NearbyMap,
-  ProductCard,
-  SearchBar,
-  StoreRow,
-} from '../components/commerce'
+import { CategoryTile, NearbyMap, ProductCard, SearchBar, StoreRow } from '../components/commerce'
+import { iconForProduct } from '../components/visuals'
 import { Button, SectionHeading, StatusBadge } from '../components/ui'
 import { useState } from 'react'
+import { useAuth } from '../auth/AuthContext'
+import { MapPin, PackageCheck } from 'lucide-react'
 
 export default function Home() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [q, setQ] = useState('')
 
   const dynamicMsg = useMemo(() => {
     // Signature NearBuy aliveness signal — grounded in real seeded inventory
     const p = getProduct('p1')
     const f = foundNearby('p1')
-    return `${f.stores} stores within 2 km have the ${p.brand} ${p.name.split('—')[0].trim()} in stock.`
+    return `${f.stores} stores within 2 km have ${p.name.split('—')[0].trim()} in stock.`
   }, [])
 
   const availableNear = useMemo(
@@ -84,53 +82,59 @@ export default function Home() {
 
   return (
     <div>
-      {/* ── Hero ─────────────────────────────────────────── */}
-      <section className="bg-primary-50 border-b border-primary-100">
-        <div className="nb-container-wide py-12 lg:py-20 lg:min-h-[520px] flex items-center">
-          <div className="grid lg:grid-cols-2 gap-10 items-center w-full">
-            <div>
-              <p className="text-caption font-bold text-primary-600 uppercase tracking-widest mb-4">
-                Search Online · Find Nearby · Reserve · Pickup · Deliver
-              </p>
-              <h1 className="text-m-hero lg:text-display-lg text-neutral-900">
-                What You Need,
-                <br />
-                Already Nearby.
-              </h1>
-              <p className="text-m-body lg:text-body-lg text-neutral-600 mt-4 max-w-lg">
-                Find products online and from stores around you — compare price, distance and
-                speed, then choose delivery, pickup or reservation.
-              </p>
-              <div className="mt-6 max-w-xl">
-                <SearchBar
-                  value={q}
-                  onChange={setQ}
-                  onSubmit={() => navigate(`/search?q=${encodeURIComponent(q)}`)}
-                />
-              </div>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <Button size="lg" onClick={() => navigate('/nearby')}>
-                  📍 Nearby
-                </Button>
-                <Button size="lg" variant="secondary" onClick={() => navigate('/nearby-now')}>
-                  ⚡ Available Now
-                </Button>
-                <Button size="lg" variant="soft" onClick={() => navigate('/nearai')}>
-                  🤖 Ask NearAI
-                </Button>
-              </div>
-              {/* dynamic aliveness message */}
-              <div className="mt-6 inline-flex items-center gap-2 bg-white rounded-full border border-primary-200 px-4 py-2 shadow-soft">
-                <span className="w-2 h-2 rounded-full bg-success-500 animate-pulse" />
-                <p className="text-body-sm font-semibold text-primary-700">{dynamicMsg}</p>
-              </div>
-            </div>
-            <div className="hidden lg:block">
-              <img
-                src="/images/hero.jpg"
-                alt="Products from stores around you on the NearBuy map"
-                className="rounded-2xl shadow-large w-full object-cover"
+      {/* A customer-only storefront, separate from the other workspaces. */}
+      <section className="customer-hero">
+        <div className="nb-container-wide customer-hero-inner">
+          <div className="customer-hero-copy">
+            <p className="customer-hero-eyebrow">
+              <span className="customer-hero-spark">✦</span> YOUR LOCAL MARKETPLACE
+            </p>
+            <h1>
+              Good things are <span>closer</span> than you think.
+            </h1>
+            <p className="customer-hero-lede">
+              Hello, {user?.name.split(' ')[0] || 'neighbour'}. Find the things you need at the stores around
+              you. Compare your options, then choose pickup, reservation or delivery.
+            </p>
+            <div className="customer-hero-search">
+              <SearchBar
+                value={q}
+                onChange={setQ}
+                onSubmit={() => navigate(`/search?q=${encodeURIComponent(q)}`)}
               />
+            </div>
+            <div className="customer-hero-actions">
+              <Button size="lg" onClick={() => navigate('/nearby')}>
+                <MapPin size={18} /> Shop nearby
+              </Button>
+              <Button size="lg" variant="secondary" onClick={() => navigate('/nearby-now')}>
+                ⚡ Available now
+              </Button>
+              <Button size="lg" variant="soft" onClick={() => navigate('/nearai')}>
+                ✦ Ask NearAI
+              </Button>
+            </div>
+            <div className="customer-hero-signal">
+              <span /> {dynamicMsg}
+            </div>
+          </div>
+          <div className="customer-hero-photo">
+            <img src="/images/hero.jpg" alt="Handmade goods at a local neighbourhood market" />
+            <div className="customer-hero-photo-gradient" />
+            <div className="customer-hero-photo-caption">
+              <p>MORE THAN A MARKETPLACE</p>
+              <strong>
+                Find the good stuff
+                <br />
+                around you.
+              </strong>
+            </div>
+            <div className="customer-hero-photo-float">
+              <PackageCheck size={20} />
+              <div>
+                <strong>Shop the neighbourhood</strong>
+                <span>Discover · compare · collect</span>
+              </div>
             </div>
           </div>
         </div>
@@ -139,7 +143,12 @@ export default function Home() {
       <div className="nb-container-wide py-10 lg:py-16 space-y-12 lg:space-y-16">
         {/* ── Categories ───────────────────────────────── */}
         <section>
-          <SectionHeading title="What do you need today?" sub="Browse by category" action="Explore all" onAction={() => navigate('/explore')} />
+          <SectionHeading
+            title="What do you need today?"
+            sub="Browse by category"
+            action="Explore all"
+            onAction={() => navigate('/explore')}
+          />
           <div className="nb-scroll-x flex gap-4 sm:grid sm:grid-cols-4 lg:grid-cols-8 pb-2">
             {CATEGORIES.map((c) => (
               <CategoryTile key={c.id} categoryId={c.id} />
@@ -209,22 +218,24 @@ export default function Home() {
             onAction={() => navigate('/deals')}
           />
           <div className="grid gap-3 md:grid-cols-2">
-            {betterPrices.map(({ id, savings, best }) => (
-              <Link
+            {betterPrices.map(({ id, savings, best }) => {
+              const product = getProduct(id)
+              const Icon = iconForProduct(product)
+              return <Link
                 key={id}
                 to={`/product/${id}`}
-                className="nb-card p-4 flex items-center gap-4 hover:shadow-medium transition-shadow duration-normal min-h-touch"
+                className="nb-card p-4 flex items-center gap-3 hover:shadow-medium transition-shadow duration-normal min-h-touch min-w-0 w-full overflow-hidden"
               >
-                <span className="text-3xl">{getProduct(id).emoji}</span>
+                <span className="product-row-icon" style={{ color: CATEGORIES.find(c => c.id === product.category)?.accent }}><Icon size={22} strokeWidth={1.8} /></span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-body font-semibold text-neutral-900 truncate">{getProduct(id).name}</p>
-                  <p className="text-[13px] text-neutral-500 mt-0.5">
+                  <p className="text-body font-semibold text-neutral-900 truncate">{product.name}</p>
+                  <p className="text-[13px] text-neutral-500 mt-0.5 truncate">
                     {best.store.name} · {formatKm(best.distance)} · {formatINR(best.price)}
                   </p>
                 </div>
                 <StatusBadge kind="stock">Save ₹{savings}</StatusBadge>
               </Link>
-            ))}
+            })}
           </div>
         </section>
 
@@ -271,7 +282,12 @@ export default function Home() {
 
         {/* ── Local deals ──────────────────────────────── */}
         <section>
-          <SectionHeading title="Local Deals" sub="Location-aware savings from stores around you." action="See all" onAction={() => navigate('/deals')} />
+          <SectionHeading
+            title="Local Deals"
+            sub="Location-aware savings from stores around you."
+            action="See all"
+            onAction={() => navigate('/deals')}
+          />
           <div className="nb-scroll-x flex gap-4 pb-2">
             {OFFERS.slice(0, 4).map((o) => (
               <Link
@@ -292,7 +308,10 @@ export default function Home() {
 
         {/* ── QuickBuy ─────────────────────────────────── */}
         <section>
-          <SectionHeading title="Buy Again" sub="Frequent purchases — tap to check nearby availability right now." />
+          <SectionHeading
+            title="Buy Again"
+            sub="Frequent purchases — tap to check nearby availability right now."
+          />
           <div className="nb-scroll-x flex gap-3 pb-2">
             {QUICKBUY.map((id) => {
               const f = foundNearby(id)
@@ -304,7 +323,9 @@ export default function Home() {
                 >
                   <span className="text-2xl">{getProduct(id).emoji}</span>
                   <div className="min-w-0">
-                    <p className="text-body-sm font-semibold text-neutral-900 truncate">{getProduct(id).name}</p>
+                    <p className="text-body-sm font-semibold text-neutral-900 truncate">
+                      {getProduct(id).name}
+                    </p>
                     <p className="text-caption text-success-600 font-semibold">
                       {f.stores > 0 ? `✓ ${f.stores} nearby` : 'Unavailable nearby'}
                     </p>
@@ -322,8 +343,8 @@ export default function Home() {
               🤖 Ask NearAI <Sparkles size={22} className="text-reserve" />
             </h2>
             <p className="text-body text-neutral-600 mt-2 max-w-xl">
-              “Where can I get football shoes tonight?” · “Find the cheapest printer nearby” ·
-              “I need a birthday gift under ₹1,000” — answers grounded in real nearby inventory.
+              “Where can I get football shoes tonight?” · “Find the cheapest printer nearby” · “I need a
+              birthday gift under ₹1,000” — answers grounded in real nearby inventory.
             </p>
           </div>
           <Button size="xl" onClick={() => navigate('/nearai')}>
@@ -333,7 +354,12 @@ export default function Home() {
 
         {/* ── Collections teaser ───────────────────────── */}
         <section>
-          <SectionHeading title="Popular in Your Area" sub="Seasonal collections curated for Dwarka." action="Explore" onAction={() => navigate('/explore')} />
+          <SectionHeading
+            title="Popular in Your Area"
+            sub="Seasonal collections curated for Dwarka."
+            action="Explore"
+            onAction={() => navigate('/explore')}
+          />
           <div className="nb-scroll-x flex gap-4 pb-2">
             {COLLECTIONS.map((c) => (
               <button
@@ -352,12 +378,15 @@ export default function Home() {
 
         {/* ── Map teaser ───────────────────────────────── */}
         <section>
-          <SectionHeading title="Your Local Map" sub="Stores, stock and pickup points around Dwarka Sector 22." action="Open Nearby" onAction={() => navigate('/nearby')} />
+          <SectionHeading
+            title="Your Local Map"
+            sub="Stores, stock and pickup points around Dwarka Sector 22."
+            action="Open Nearby"
+            onAction={() => navigate('/nearby')}
+          />
           <NearbyMap stores={STORES.slice(0, 6)} height={300} />
         </section>
       </div>
     </div>
   )
 }
-
-

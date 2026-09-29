@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { ReservationCard } from '../components/commerce'
 import { EmptyState } from '../components/ui'
@@ -17,19 +18,19 @@ const FILTERS: { id: ReservationStatus | 'all'; label: string }[] = [
 
 export default function Reservations() {
   const navigate = useNavigate()
-  const { reservations } = useApp()
+  const { reservations, refreshCommerce, commerceError } = useApp()
   const [filter, setFilter] = useState<ReservationStatus | 'all'>('all')
+  useEffect(() => { if (__NEARBUY_PREVIEW__) void refreshCommerce() }, [refreshCommerce])
 
   const list = reservations.filter((r) => filter === 'all' || r.status === filter)
 
   return (
     <div className="nb-container py-6 lg:py-10 space-y-6">
-      <div>
-        <h1 className="text-m-h1 lg:text-h1">Reservations</h1>
-        <p className="text-body-sm text-neutral-500 mt-1">
-          Booked at nearby stores — each with a QR code, pickup code and expiry time.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h1 className="text-m-h1 lg:text-h1">Reservations</h1><p className="text-body-sm text-neutral-500 mt-1">Booked at nearby stores — each with a QR code, pickup code and expiry time.</p></div>
+        {__NEARBUY_PREVIEW__ && <button type="button" onClick={() => void refreshCommerce()} className="hub-secondary-button"><RefreshCw size={16} /> Refresh status</button>}
       </div>
+      {commerceError && <div role="alert" className="rounded-lg border border-error-200 bg-error-50 text-error-700 p-3 text-body-sm">{commerceError}</div>}
 
       <div className="flex gap-2 nb-scroll-x pb-1">
         {FILTERS.map((f) => (

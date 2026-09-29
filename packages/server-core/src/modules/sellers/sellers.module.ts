@@ -15,12 +15,16 @@ type StoreUpdateInput = z.infer<typeof updateStoreSchema>
 export class SellersController {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Become a seller: creates Seller + first Store in one transaction. */
+  /** Complete onboarding for an account already registered as SELLER. */
+  @Roles('SELLER')
   @Post('register')
   async register(
     @CurrentUser() user: AuthUser,
     @Body(new ZodValidationPipe(sellerRegisterSchema)) body: SellerRegisterInput,
   ) {
+    // RolesGuard intentionally lets SUPER_ADMIN bypass @Roles, but onboarding
+    // must never attach a seller profile to an administrative account.
+    if (user.role !== 'SELLER') throw Errors.forbidden('Only seller accounts can set up a store.')
     const existing = await this.prisma.seller.findUnique({ where: { userId: user.id } })
     if (existing) throw Errors.conflict('You are already a seller.', 'ALREADY_SELLER')
 
@@ -52,7 +56,6 @@ export class SellersController {
         },
         include: { stores: true },
       }),
-      this.prisma.user.update({ where: { id: user.id }, data: { role: 'SELLER' } }),
       this.prisma.auditLog.create({
         data: { actorId: user.id, action: 'seller_registered', entity: 'Seller' },
       }),
@@ -60,8 +63,10 @@ export class SellersController {
     return seller
   }
 
+  @Roles('SELLER')
   @Get('me')
   async me(@CurrentUser() user: AuthUser) {
+    if (user.role !== 'SELLER') throw Errors.forbidden('Only seller accounts can open Seller Hub.')
     const seller = await this.prisma.seller.findUnique({
       where: { userId: user.id },
       include: { stores: { include: { inventory: true } } },

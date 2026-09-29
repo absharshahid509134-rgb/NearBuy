@@ -4,7 +4,7 @@ import { inventoryBulkSchema, stockConfirmRespondSchema } from '@nearbuy/validat
 import type { z } from 'zod'
 import { INJECTION, PrismaService, type CacheStore } from '../../common/core.module'
 import { Errors, ZodValidationPipe } from '../../common/errors'
-import { CurrentUser, Public, Roles, type AuthUser } from '../../common/guards'
+import { CurrentUser, Roles, type AuthUser } from '../../common/guards'
 import type { NotificationBus } from '@nearbuy/notifications'
 import { confidence } from '../stores/stores.module'
 /**
@@ -191,9 +191,10 @@ export class InventoryController {
   async list(@CurrentUser() user: AuthUser, @Query('storeId') storeId?: string) {
     const mine = await this.myStoreIds(user)
     if (!mine.length) return []
-    const where = { storeId: storeId ?? mine[0] }
+    const selected = storeId ?? mine[0]
+    if (!mine.includes(selected)) throw Errors.forbidden('This store is not on your account.')
     const rows = await this.prisma.inventory.findMany({
-      where,
+      where: { storeId: selected },
       include: { product: { include: { brand: true } } },
       orderBy: { lastUpdatedAt: 'desc' },
     })
@@ -240,8 +241,10 @@ export class InventoryController {
   async audit(@CurrentUser() user: AuthUser, @Query('storeId') storeId?: string) {
     const mine = await this.myStoreIds(user)
     if (!mine.length) return []
+    const selected = storeId ?? mine[0]
+    if (!mine.includes(selected)) throw Errors.forbidden('This store is not on your account.')
     return this.prisma.inventoryAudit.findMany({
-      where: { inventory: { storeId: storeId ?? mine[0] } },
+      where: { inventory: { storeId: selected } },
       orderBy: { createdAt: 'desc' },
       take: 50,
     })
@@ -305,12 +308,16 @@ export class StockRequestsController {
   ) {}
 
   /** Customer asks a store to confirm uncertain inventory (rate-limited upstream). */
+  @Roles('CUSTOMER')
   @Post()
   async request(
     @CurrentUser() user: AuthUser,
     @Body() body: { storeId: string; productId: string; qty?: number },
   ) {
     if (!body?.storeId || !body?.productId) throw Errors.badRequest('storeId and productId required.')
+    if (body.qty !== undefined && (!Number.isInteger(body.qty) || body.qty < 1 || body.qty > 99)) throw Errors.badRequest('Choose a quantity from 1 to 99.')
+    const listing = await this.prisma.inventory.findFirst({ where: { storeId: body.storeId, productId: body.productId }, select: { id: true } })
+    if (!listing) throw Errors.notFound('This store does not carry that item.')
     const key = `stockreq:${user.id}:${body.productId}:${body.storeId}`
     const n = await this.cache.incr(key, 600)
     if (n > 5) throw Errors.tooMany('You have already asked several times for this item.')
@@ -324,10 +331,30 @@ export class StockRequestsController {
     })
   }
 
-  @Public()
+  @Roles('CUSTOMER')
+  @Get('mine')
+  mine(@CurrentUser() user: AuthUser) {
+    return this.prisma.stockConfirmRequest.findMany({
+      where: { userId: user.id },
+      select: { id: true, storeId: true, productId: true, status: true, createdAt: true, respondedAt: true },
+      orderBy: { createdAt: 'desc' }, take: 50,
+    })
+  }
+
+  @Roles('SELLER', 'STORE_STAFF', 'ADMIN', 'SUPER_ADMIN')
   @Get()
-  list(@Query('storeId') storeId: string) {
-    return this.prisma.stockConfirmRequest.findMany({ where: { storeId }, orderBy: { createdAt: 'desc' }, take: 50 })
+  async list(@CurrentUser() user: AuthUser, @Query('storeId') storeId: string) {
+    if (!storeId) throw Errors.badRequest('Choose a store before viewing stock requests.')
+    if (!['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
+      const owner = await this.prisma.store.findFirst({ where: { id: storeId, seller: { userId: user.id } }, select: { id: true } })
+      const staff = owner ? null : await this.prisma.storeStaff.findFirst({ where: { storeId, userId: user.id } })
+      if (!owner && !staff) throw Errors.forbidden('This store is not on your account.')
+    }
+    return this.prisma.stockConfirmRequest.findMany({
+      where: { storeId },
+      select: { id: true, storeId: true, productId: true, qty: true, status: true, respondedAt: true, createdAt: true },
+      orderBy: { createdAt: 'desc' }, take: 50,
+    })
   }
 }
 

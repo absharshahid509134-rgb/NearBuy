@@ -2,17 +2,20 @@ import React, { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import {
+  Bike,
   ChevronRight,
   Clock,
   Heart,
   Minus,
   Package,
+  PackageCheck,
   Plus,
   Search as SearchIcon,
   ShieldCheck,
   ShoppingCart,
   Store as StoreIcon,
   X,
+  type LucideIcon,
 } from 'lucide-react'
 import type {
   FulfillmentType,
@@ -39,6 +42,7 @@ import { formatINR, formatKm, minsUntil, timeAgo } from '../lib/format'
 import { useApp } from '../store/AppContext'
 import { Button, FastBadge, NearbyBadge, Price, ProductCardSkeleton, ReserveBadge, StatusBadge, VerifiedBadge } from './ui'
 import { CATEGORIES, CATEGORY_MAP } from '../data/catalog'
+import { CategoryIcon, iconForProduct } from './visuals'
 
 /* ── Product visual (consistent category tiles + real photos) ── */
 export function ProductVisual({
@@ -60,17 +64,20 @@ export function ProductVisual({
     p26: '/images/local-market.jpg',
   }
   const src = photo[product.id]
+  const Icon = iconForProduct(product)
   return (
     <div
       className={`relative aspect-[4/3] rounded-lg overflow-hidden bg-neutral-50 flex items-center justify-center ${className}`}
-      style={{ background: cat?.tint ?? '#F8FAFC' }}
+      style={{ background: cat?.tint ?? '#F8FAFC', '--art-accent': cat?.accent ?? '#2563EB' } as React.CSSProperties}
     >
       {src ? (
         <img src={src} alt={product.name} className="w-full h-full object-cover" loading="lazy" />
       ) : (
-        <span className="text-6xl select-none" role="img" aria-label={product.name}>
-          {product.emoji}
-        </span>
+        <div className="product-art" role="img" aria-label={`${product.name} illustration`}>
+          <span className="product-art-orbit" />
+          <span className="product-art-icon"><Icon strokeWidth={1.45} aria-hidden="true" /></span>
+          <span className="product-art-dot one" /><span className="product-art-dot two" />
+        </div>
       )}
     </div>
   )
@@ -184,8 +191,8 @@ export function StoreCard({ storeId }: { storeId: string }) {
         {store.cover ? (
           <img src={store.cover} alt={store.name} className="w-full h-full object-cover" loading="lazy" />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-5xl" style={{ background: CATEGORY_MAP[store.category]?.tint }}>
-            {store.emoji}
+          <div className="w-full h-full flex items-center justify-center" style={{ background: CATEGORY_MAP[store.category]?.tint, color: CATEGORY_MAP[store.category]?.accent }}>
+            <CategoryIcon category={store.category} size={48} />
           </div>
         )}
       </Link>
@@ -230,14 +237,7 @@ export function StoreCard({ storeId }: { storeId: string }) {
   )
 }
 
-/* ── Search bar with rotating placeholder ───────────────── */
-const PLACEHOLDERS = [
-  'Search products, brands, stores…',
-  'Find sports shoes nearby…',
-  'Looking for something urgent?',
-  'Try “school bag under ₹1500”',
-]
-
+/* ── Search bar ────────────────────────────────────────── */
 export function SearchBar({
   value,
   onChange,
@@ -249,11 +249,6 @@ export function SearchBar({
   onSubmit: () => void
   autoFocus?: boolean
 }) {
-  const [ph, setPh] = React.useState(0)
-  React.useEffect(() => {
-    const t = setInterval(() => setPh((p) => (p + 1) % PLACEHOLDERS.length), 4200)
-    return () => clearInterval(t)
-  }, [])
   return (
     <form
       onSubmit={(e) => {
@@ -266,7 +261,8 @@ export function SearchBar({
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={PLACEHOLDERS[ph]}
+        placeholder="Search local products"
+        aria-label="Search products and stores"
         autoFocus={autoFocus}
         className="flex-1 bg-transparent outline-none text-[15px] lg:text-body placeholder:text-neutral-500 min-w-0"
       />
@@ -292,23 +288,27 @@ export function AvailabilityLine({
 }) {
   const conf = availabilityConfidence(listing.updatedMinsAgo)
   const { liveChecks, requestLiveCheck } = useApp()
-  const asked = liveChecks[productId]
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const asked = liveChecks[`${listing.store.id}:${productId}`]
+  async function request() {
+    setBusy(true)
+    setError('')
+    try { await requestLiveCheck(productId, listing.store.id) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not reach the store. Try again.') }
+    finally { setBusy(false) }
+  }
   return (
     <div className="space-y-2">
       <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-caption font-semibold ${conf.className}`}>
-        {conf.key === 'fresh' ? '🟢' : conf.key === 'stale' ? '🟡' : '⚪'} {conf.label} · {conf.hint}
+        <span className={`w-1.5 h-1.5 rounded-full ${conf.key === 'fresh' ? 'bg-success-500' : conf.key === 'stale' ? 'bg-warning-500' : 'bg-neutral-400'}`} />
+        {conf.label} · {conf.hint}
       </div>
-      {conf.key === 'unknown' && (
-        <div className="flex items-center gap-3">
-          {!asked ? (
-            <Button variant="secondary" size="sm" onClick={() => requestLiveCheck(productId)}>
-              Ask Store to Confirm
-            </Button>
-          ) : (
-            <span className="text-caption text-success-600 font-semibold">✓ Store asked to confirm</span>
-          )}
-        </div>
-      )}
+      {conf.key !== 'fresh' && !asked && <Button variant="secondary" size="sm" disabled={busy} loading={busy} onClick={() => void request()}>Ask store to confirm</Button>}
+      {asked === 'pending' && <p className="text-caption text-primary-600 font-semibold">Shelf check sent. Waiting for the store to reply.</p>}
+      {asked === 'available' && <p className="text-caption text-success-700 font-semibold">The store confirmed stock. This is not a hold — reserve it to be sure.</p>}
+      {asked === 'unavailable' && <p className="text-caption text-warning-700 font-semibold">The store could not confirm stock right now. Try another nearby store.</p>}
+      {error && <p role="alert" className="text-caption text-error-600">{error}</p>}
     </div>
   )
 }
@@ -316,56 +316,33 @@ export function AvailabilityLine({
 /* ── Fulfillment selector (visual heart of product page) ── */
 export interface FulfillmentOption {
   id: FulfillmentType
-  icon: string
+  icon: LucideIcon
   title: string
   detail: string
   fee: number
   available: boolean
 }
 
-export function buildFulfillmentOptions(product: Product, listing?: { store: Store; distance: number }): FulfillmentOption[] {
+export function buildFulfillmentOptions(_product: Product, listing?: { store: Store; distance: number; reserveable?: boolean }): FulfillmentOption[] {
   const d = listing?.distance ?? 1.2
   const s = listing?.store
+  // Online standard/fast delivery is a comparison, not a checkout choice in
+  // this local-store journey. Offer only methods the checkout can fulfil.
   return [
     {
-      id: 'standard',
-      icon: '🚚',
-      title: 'Standard Delivery',
-      detail: product.online ? `${product.online.etaDaysMin}–${product.online.etaDaysMax} days` : 'Not available online',
-      fee: 40,
-      available: !!product.online,
+      id: 'local', icon: Bike, title: 'Local delivery',
+      detail: s ? `From ${s.name} · about ${35 + Math.round(d * 8)} min` : 'Not deliverable',
+      fee: 30, available: !!s && s.localDelivery && s.open,
     },
     {
-      id: 'fast',
-      icon: '⚡',
-      title: 'Fast Delivery',
-      detail: product.online ? '1–2 days' : 'Not available',
-      fee: 80,
-      available: !!product.online,
+      id: 'pickup', icon: StoreIcon, title: 'Pickup today',
+      detail: s ? `${formatKm(d)} away · store confirms when ready` : 'No nearby store',
+      fee: 0, available: !!s && s.pickup && s.open,
     },
     {
-      id: 'pickup',
-      icon: '🏪',
-      title: 'Nearby Pickup',
-      detail: s ? `${formatKm(d)} · Today · ready in ${s.prepMins} min` : 'No nearby store',
-      fee: 0,
-      available: !!s && s.pickup && s.open,
-    },
-    {
-      id: 'local',
-      icon: '🛵',
-      title: 'Local Delivery',
-      detail: s ? `${35 + Math.round(d * 8)} min from ${s.name}` : 'Not deliverable',
-      fee: 30,
-      available: !!s && s.localDelivery,
-    },
-    {
-      id: 'reserve',
-      icon: '📦',
-      title: 'Reserve & Pickup',
-      detail: 'Book now · Collect today',
-      fee: 0,
-      available: !!s && s.pickup,
+      id: 'reserve', icon: PackageCheck, title: 'Reserve & Pickup',
+      detail: s ? 'Ask the store to hold it for your chosen window' : 'No nearby store',
+      fee: 0, available: !!s && s.pickup && s.open && !!listing?.reserveable,
     },
   ]
 }
@@ -383,6 +360,7 @@ export function FulfillmentSelector({
     <div className="grid gap-2.5 sm:grid-cols-2">
       {options.map((o) => {
         const active = selected === o.id
+        const Icon = o.icon
         return (
           <button
             key={o.id}
@@ -395,7 +373,7 @@ export function FulfillmentSelector({
             } ${!o.available ? 'opacity-45 pointer-events-none' : ''}`}
           >
             <div className="flex items-center gap-2.5">
-              <span className="text-2xl">{o.icon}</span>
+              <span className="text-primary-600"><Icon size={21} strokeWidth={1.8} /></span>
               <div className="flex-1 min-w-0">
                 <p className="text-body font-semibold text-neutral-900 flex items-center gap-2">
                   {o.title}
@@ -616,7 +594,7 @@ export function ReservationCard({
         <div className="px-5 pb-5 space-y-4 animate-slideup">
           <div className="flex flex-col xs:flex-row gap-5 items-center bg-white rounded-xl border border-reserveborder p-5">
             <div className="bg-white p-3 rounded-lg border border-neutral-200">
-              <QRCodeSVG value={`nearbuy://pickup/${reservation.id}/${reservation.code}`} size={128} />
+              <QRCodeSVG value={`nearbuy://pickup/${reservation.serverId ?? reservation.id}/${reservation.code}`} size={128} />
             </div>
             <div className="text-center xs:text-left">
               <p className="text-caption text-neutral-500 uppercase font-bold tracking-wider">Pickup Code</p>
@@ -714,6 +692,12 @@ export function OrderCard({ order, onTrack }: { order: Order; onTrack?: () => vo
         <div className="mt-5 pt-5 border-t border-neutral-100 grid md:grid-cols-2 gap-6 animate-slideup">
           <OrderTimeline order={order} />
           <div className="space-y-2 text-body-sm text-neutral-600">
+            {order.handoffCode && order.status === 'out_for_delivery' && (
+              <div className="rounded-lg bg-success-50 border border-success-200 p-3.5">
+                <p className="font-bold text-success-800">Customer handoff code <span className="font-data tracking-widest text-lg ml-1">{order.handoffCode}</span></p>
+                <p className="text-caption text-success-700 mt-1">Give this code only to the rider at your door.</p>
+              </div>
+            )}
             {order.courier && (
               <p>
                 <Package size={14} className="inline mr-1" /> {order.courier}
@@ -794,10 +778,10 @@ export function CategoryTile({ categoryId, to }: { categoryId: string; to?: stri
       className="flex flex-col items-center gap-2 group min-h-touch"
     >
       <span
-        className="w-[72px] h-[72px] lg:w-20 lg:h-20 rounded-2xl flex items-center justify-center text-3xl group-hover:scale-105 transition-transform duration-fast"
-        style={{ background: cat.tint }}
+        className="w-[72px] h-[72px] lg:w-20 lg:h-20 rounded-2xl flex items-center justify-center group-hover:scale-105 transition-transform duration-fast"
+        style={{ background: cat.tint, color: cat.accent }}
       >
-        {cat.emoji}
+        <CategoryIcon category={cat.id} size={31} />
       </span>
       <span className="text-[13px] font-semibold text-neutral-700">{cat.name}</span>
     </button>
@@ -811,13 +795,13 @@ export function StoreRow({ storeId }: { storeId: string }) {
   return (
     <Link
       to={`/store/${storeId}`}
-      className="nb-card flex items-center gap-4 px-4 py-3.5 hover:shadow-medium transition-shadow duration-normal min-h-touch"
+      className="nb-card flex items-center gap-3 sm:gap-4 px-3 sm:px-4 py-3.5 hover:shadow-medium transition-shadow duration-normal min-h-touch min-w-0 w-full overflow-hidden"
     >
       <span
-        className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0"
-        style={{ background: CATEGORY_MAP[store.category]?.tint }}
+        className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0"
+        style={{ background: CATEGORY_MAP[store.category]?.tint, color: CATEGORY_MAP[store.category]?.accent }}
       >
-        {store.emoji}
+        <CategoryIcon category={store.category} size={22} />
       </span>
       <div className="flex-1 min-w-0">
         <p className="text-body font-bold text-neutral-900 truncate flex items-center gap-1.5">
@@ -828,10 +812,10 @@ export function StoreRow({ storeId }: { storeId: string }) {
           ★ {store.rating} · 📍 {formatKm(dist)}
         </p>
       </div>
-      <span className={`text-[13px] font-semibold ${store.open ? 'text-success-600' : 'text-neutral-400'}`}>
-        {store.open ? '🟢 Open' : `Opens ${store.opensAt}`}
+      <span className={`text-[12px] font-semibold whitespace-nowrap ${store.open ? 'text-success-600' : 'text-neutral-400'}`}>
+        {store.open ? '● Open' : `Opens ${store.opensAt}`}
       </span>
-      <ChevronRight size={18} className="text-neutral-300" />
+      <ChevronRight size={18} className="text-neutral-300 shrink-0 hidden sm:block" />
     </Link>
   )
 }
@@ -944,6 +928,7 @@ export function OptionRow({
   sub,
   right,
   accent,
+  disabled = false,
 }: {
   active: boolean
   onClick: () => void
@@ -951,11 +936,14 @@ export function OptionRow({
   sub?: React.ReactNode
   right?: React.ReactNode
   accent?: string
+  disabled?: boolean
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`w-full flex items-center gap-3 rounded-xl border-2 p-4 text-left transition-all duration-fast min-h-touch ${
+      disabled={disabled}
+      className={`w-full flex items-center gap-3 rounded-xl border-2 p-4 text-left transition-all duration-fast min-h-touch disabled:opacity-50 disabled:cursor-not-allowed ${
         active ? 'border-primary-500 bg-primary-50' : 'border-neutral-200 bg-white hover:border-primary-200'
       }`}
     >

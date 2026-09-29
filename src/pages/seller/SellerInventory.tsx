@@ -1,195 +1,195 @@
 import { useState } from 'react'
-import { LISTINGS, PRODUCTS } from '../../data/catalog'
-import { availabilityConfidence, getProduct } from '../../lib/geo'
-import { formatINR, timeAgo } from '../../lib/format'
-import { ProductVisual } from '../../components/commerce'
-import { Button, Input, SectionHeading, StatCard, StatusBadge, Tabs, Alert } from '../../components/ui'
-import { useApp } from '../../store/AppContext'
-
-const SELLER_ID = 's1'
+import { Boxes, CheckCircle2, CircleAlert, HelpCircle, RefreshCw, Search, SlidersHorizontal, XCircle } from 'lucide-react'
+import { useSeller, type SellerInventoryItem } from '../../seller/SellerContext'
+import { HubEmpty, HubError, HubLoading, rupees, StatusPill, when } from '../../seller/components'
 
 export default function SellerInventory() {
-  const [tab, setTab] = useState<'inventory' | 'products' | 'store'>('inventory')
-  const [qtyEdit, setQtyEdit] = useState<Record<string, number>>({})
-  const { toast } = useApp()
-  const inv = LISTINGS.filter((l) => l.storeId === SELLER_ID)
-  const low = inv.filter((l) => l.stock <= 4)
-
+  const { inventory, stockRequests, loading, error, refresh, updateStock, respondToStockCheck } = useSeller()
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<'all' | 'low' | 'out'>('all')
+  const [draft, setDraft] = useState<Record<string, string>>({})
+  const [working, setWorking] = useState<string | null>(null)
+  const [actionError, setActionError] = useState('')
+  const items = inventory.filter(
+    (item) =>
+      `${item.name} ${item.brand ?? ''}`.toLowerCase().includes(query.toLowerCase()) &&
+      (filter === 'all' ||
+        (filter === 'low'
+          ? item.availableQuantity > 0 && item.availableQuantity <= 4
+          : item.availableQuantity === 0)),
+  )
+  const low = inventory.filter((item) => item.availableQuantity > 0 && item.availableQuantity <= 4).length
+  const out = inventory.filter((item) => item.availableQuantity === 0).length
+  async function respond(id: string, available: boolean) {
+    setWorking(id)
+    setActionError('')
+    try { await respondToStockCheck(id, available) }
+    catch (cause) { setActionError(cause instanceof Error ? cause.message : 'Could not answer this request.') }
+    finally { setWorking(null) }
+  }
+  async function save(item: SellerInventoryItem) {
+    const quantity = Number(draft[item.id])
+    if (!Number.isInteger(quantity) || quantity < item.reservedQuantity || quantity > 99999) {
+      setActionError(`Enter a whole-number quantity of at least ${item.reservedQuantity} for ${item.name}.`)
+      return
+    }
+    setWorking(item.id)
+    setActionError('')
+    try {
+      await updateStock(item, quantity)
+      setDraft((d) => {
+        const next = { ...d }
+        delete next[item.id]
+        return next
+      })
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : 'Could not save this stock level.')
+    } finally {
+      setWorking(null)
+    }
+  }
+  if (loading && !inventory.length) return <HubLoading />
+  if (error) return <HubError message={error} retry={() => void refresh()} />
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-m-h2 lg:text-h2 font-bold">Inventory & Products</h1>
-        <p className="text-body-sm text-neutral-500 mt-1">
-          Smart inventory — freshness, reorder suggestions and demand signals.
-        </p>
-      </div>
-
-      <Tabs<'inventory' | 'products' | 'store'>
-        tabs={[
-          { id: 'inventory', label: '📊 Inventory', count: inv.length },
-          { id: 'products', label: '🛍️ Products', count: PRODUCTS.length },
-          { id: 'store', label: '🏪 Store & QR' },
-        ]}
-        active={tab}
-        onChange={setTab}
-      />
-
-      {tab === 'inventory' && (
-        <div className="space-y-5">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard label="In Stock" value={inv.filter((l) => l.stock > 4).length + 1275} accent="text-success-600" />
-            <StatCard label="Low Stock" value={low.length + 80} accent="text-warning-700" />
-            <StatCard label="Out of Stock" value={20} accent="text-error-500" />
-            <StatCard label="Updated today" value={inv.filter((l) => l.updatedMinsAgo < 480).length} hint="fresh inventory ranks higher" />
-          </div>
-
-          {low.length > 0 && (
-            <Alert kind="warning" title="⚠ Reorder suggestions">
-              Based on sales velocity: Nivia Volleyball (~6 units left after 5 days), Football Shoes — reorder suggested. High demand this week.
-            </Alert>
-          )}
-
-          <div className="nb-card overflow-x-auto">
-            <table className="w-full min-w-[720px] nb-table">
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Price</th>
-                  <th>Stock</th>
-                  <th>Confidence</th>
-                  <th>Signal</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {inv.map((l) => {
-                  const p = getProduct(l.productId)
-                  const conf = availabilityConfidence(l.updatedMinsAgo)
-                  const edited = qtyEdit[l.productId] ?? l.stock
-                  return (
-                    <tr key={l.productId}>
-                      <td>
-                        <div className="flex items-center gap-3">
-                          <ProductVisual product={p} className="w-10 h-10 aspect-none rounded-md" />
-                          <span className="font-semibold text-neutral-900">{p.name}</span>
-                        </div>
-                      </td>
-                      <td className="font-data font-semibold">{formatINR(l.price)}</td>
-                      <td>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            value={edited}
-                            min={0}
-                            onChange={(e) => setQtyEdit({ ...qtyEdit, [l.productId]: Math.max(0, +e.target.value) })}
-                            className="w-16 h-9 px-2 rounded-md border border-neutral-300 font-data nb-focus"
-                          />
-                          {edited !== l.stock && (
-                            <Button
-                              size="sm"
-                              onClick={() => {
-                                toast({ kind: 'success', title: 'Inventory updated', body: `${p.name} → ${edited} units. Freshness: confirmed recently.` })
-                                setQtyEdit((q) => {
-                                  const c = { ...q }
-                                  delete c[l.productId]
-                                  return c
-                                })
-                              }}
-                            >
-                              Save
-                            </Button>
-                          )}
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`inline-flex px-2.5 py-1 rounded-full text-caption font-semibold ${conf.className}`}>
-                          {conf.key === 'fresh' ? '🟢' : conf.key === 'stale' ? '🟡' : '⚪'} {conf.hint}
-                        </span>
-                      </td>
-                      <td>
-                        {l.stock <= 4 ? (
-                          <StatusBadge kind="low">⚠ Reorder</StatusBadge>
-                        ) : l.stock > 20 ? (
-                          <StatusBadge kind="ready">📈 High demand</StatusBadge>
-                        ) : (
-                          <StatusBadge kind="stock">Steady</StatusBadge>
-                        )}
-                      </td>
-                      <td>
-                        <span className="text-caption text-neutral-400">{timeAgo(l.updatedMinsAgo)}</span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-caption text-neutral-400">
-            Availability confidence is derived from how recently inventory was updated — customers see it too.
-          </p>
+    <div className="hub-page">
+      <div className="hub-page-header">
+        <div>
+          <p className="hub-overline dark">SELLER HUB / YOUR SHELVES</p>
+          <h1>Inventory</h1>
+          <p>Keep what’s on your shelves in sync with what customers see.</p>
         </div>
-      )}
-
-      {tab === 'products' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <SectionHeading title="Product catalog" sub={`${PRODUCTS.length} products on NearBuy · your shelf is live at nearbuy.com/store/abc-sports`} />
-            <Button size="md" onClick={() => toast({ kind: 'success', title: 'Add product', body: 'Upload photos or use Seller AI: “Add 12 footballs”.' })}>
-              + Add product
-            </Button>
+        <button className="hub-secondary-button" onClick={() => void refresh()}>
+          <RefreshCw size={16} /> Refresh
+        </button>
+      </div>
+      {actionError && <div className="hub-inline-error" role="alert">{actionError}</div>}
+      <div className="hub-inventory-summary">
+        <div>
+          <span className="hub-stat-icon blue">
+            <Boxes size={20} />
+          </span>
+          <strong>{inventory.length}</strong>
+          <small>Products listed</small>
+        </div>
+        <div>
+          <span className="hub-stat-icon amber">
+            <CircleAlert size={20} />
+          </span>
+          <strong>{low}</strong>
+          <small>Running low</small>
+        </div>
+        <div>
+          <span className="hub-stat-icon red">
+            <Boxes size={20} />
+          </span>
+          <strong>{out}</strong>
+          <small>Out of stock</small>
+        </div>
+      </div>
+      <section className="hub-panel hub-stock-checks" id="stock-requests" aria-labelledby="stock-requests-title">
+        <div className="hub-panel-heading"><div><p className="hub-panel-eyebrow">FROM YOUR NEIGHBOURS</p><h2 id="stock-requests-title">Shelf checks {stockRequests.length ? `(${stockRequests.length})` : ''}</h2></div><HelpCircle size={20} className="text-primary-500" /></div>
+        {stockRequests.length ? <div className="hub-stock-check-list">{stockRequests.map((check) => <div key={check.id} className="hub-stock-check"><div><strong>{check.product?.name ?? inventory.find((item) => item.productId === check.productId)?.name ?? 'Store product'}</strong><p>Customer asked for {check.qty} · {when(check.createdAt)}</p></div><div className="hub-stock-check-actions"><button type="button" disabled={working === check.id} onClick={() => void respond(check.id, true)}><CheckCircle2 size={16} /> In stock</button><button type="button" disabled={working === check.id} onClick={() => void respond(check.id, false)}><XCircle size={16} /> Not available</button></div></div>)}</div> : <p className="hub-stock-check-empty">No shelf checks waiting. When a neighbour asks you to confirm stock, you can answer right here.</p>}
+      </section>
+      <div className="hub-panel hub-inventory-panel">
+        <div className="hub-inventory-tools">
+          <label>
+            <Search size={18} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search your products…"
+              aria-label="Search inventory"
+            />
+          </label>
+          <div className="hub-filter-buttons" aria-label="Filter inventory">
+            <SlidersHorizontal size={16} />
+            {(['all', 'low', 'out'] as const).map((option) => (
+              <button
+                className={filter === option ? 'selected' : ''}
+                key={option}
+                onClick={() => setFilter(option)}
+              >
+                {option === 'all' ? 'All' : option === 'low' ? 'Low stock' : 'Sold out'}
+              </button>
+            ))}
           </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {PRODUCTS.filter((p) => inv.some((l) => l.productId === p.id)).map((p) => (
-              <div key={p.id} className="nb-card p-4 flex gap-3">
-                <ProductVisual product={p} className="w-16 h-16 aspect-none rounded-lg" />
-                <div className="min-w-0">
-                  <p className="text-body-sm font-semibold truncate">{p.name}</p>
-                  <p className="text-caption text-neutral-500">{formatINR(p.price)} · {p.brand}</p>
-                  <StatusBadge kind="stock" className="mt-1">✓ Live on storefront</StatusBadge>
+        </div>
+        {items.length ? (
+          <div className="hub-inventory-list">
+            <div className="hub-inventory-labels">
+              <span>PRODUCT</span>
+              <span>PRICE</span>
+              <span>AVAILABLE</span>
+              <span>TOTAL STOCK</span>
+              <span>STATUS</span>
+            </div>
+            {items.map((item) => (
+              <div className="hub-inventory-row" key={item.id}>
+                <div className="hub-inventory-product">
+                  <span>{item.emoji || '📦'}</span>
+                  <div>
+                    <strong>{item.name}</strong>
+                    <small>
+                      {item.brand || 'Local product'} · Updated {item.updatedMinsAgo} min ago
+                    </small>
+                  </div>
+                </div>
+                <div className="hub-inventory-price" data-label="Price">
+                  {rupees(item.price)}
+                </div>
+                <div className="hub-inventory-available" data-label="Available">
+                  {item.availableQuantity}{' '}
+                  <small>{item.reservedQuantity ? `${item.reservedQuantity} reserved` : 'to sell'}</small>
+                </div>
+                <div className="hub-inventory-edit">
+                  <label className="sr-only" htmlFor={`stock-${item.id}`}>
+                    Total stock for {item.name}
+                  </label>
+                  <input
+                    id={`stock-${item.id}`}
+                    type="number"
+                    min={item.reservedQuantity}
+                    max={99999}
+                    value={draft[item.id] ?? item.quantity}
+                    onChange={(e) => setDraft((d) => ({ ...d, [item.id]: e.target.value }))}
+                  />
+                  <button
+                    onClick={() => void save(item)}
+                    disabled={
+                      working === item.id ||
+                      draft[item.id] === undefined ||
+                      Number(draft[item.id]) === item.quantity ||
+                      !draft[item.id]
+                    }
+                  >
+                    {working === item.id ? 'Saving' : 'Save'}
+                  </button>
+                </div>
+                <div className="hub-inventory-status">
+                  <StatusPill
+                    status={
+                      item.availableQuantity === 0
+                        ? 'OUT_OF_STOCK'
+                        : item.availableQuantity <= 4
+                          ? 'LOW_STOCK'
+                          : 'IN_STOCK'
+                    }
+                  />
                 </div>
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {tab === 'store' && (
-        <div className="grid lg:grid-cols-2 gap-6 max-w-4xl">
-          <div className="nb-card p-6 space-y-4">
-            <SectionHeading title="Store profile" sub="Your storefront is shareable on WhatsApp, Instagram & QR posters." />
-            <Input label="Store name" defaultValue="ABC Sports" />
-            <Input label="Address" defaultValue="Shop 14, Sector 22 Market, Dwarka, Delhi" />
-            <Input label="Hours" defaultValue="9:00 AM – 9:00 PM" />
-            <div className="flex gap-2 flex-wrap">
-              <StatusBadge kind="ready">📦 Pickup enabled</StatusBadge>
-              <StatusBadge kind="stock">🛵 Local delivery enabled</StatusBadge>
-              <StatusBadge kind="stock">✓ Verified</StatusBadge>
-            </div>
-            <Button onClick={() => toast({ kind: 'success', title: 'Store updated', body: 'Your storefront reflects the change instantly.' })}>
-              Save store
-            </Button>
-          </div>
-          <div className="nb-card p-6 text-center">
-            <SectionHeading title="Store QR" sub="Counter poster — scan to view products & reserve." />
-            <div className="inline-block bg-white border border-neutral-200 rounded-xl p-6">
-              <div className="w-40 h-40 mx-auto bg-neutral-900 rounded-lg flex items-center justify-center">
-                <div className="grid grid-cols-5 gap-1 p-3">
-                  {Array.from({ length: 25 }).map((_, i) => (
-                    <span key={i} className={`w-4 h-4 rounded-[3px] ${(i * 7) % 3 === 0 ? 'bg-white' : 'bg-neutral-900'}`} />
-                  ))}
-                </div>
-              </div>
-              <p className="text-caption text-neutral-500 mt-3">nearbuy.com/store/abc-sports</p>
-            </div>
-            <p className="text-body-sm text-neutral-500 mt-4">
-              Physical shop → NearBuy QR → digital store → inventory → reservation / delivery
-            </p>
-            <Button variant="secondary" size="md" className="mt-4" onClick={() => window.print()}>
-              Print poster
-            </Button>
-          </div>
-        </div>
-      )}
+        ) : (
+          <HubEmpty
+            title={query || filter !== 'all' ? 'No matching products' : 'Your shelves are waiting'}
+            body={
+              query || filter !== 'all'
+                ? 'Try a different search or filter.'
+                : 'Once products are added to your store, you can manage their stock here.'
+            }
+          />
+        )}
+      </div>
     </div>
   )
 }

@@ -1,6 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { SEED_ORDERS, SEED_RESERVATIONS, SEED_WISHLIST } from '../data/catalog'
+import { LISTINGS, SEED_ORDERS, SEED_RESERVATIONS, SEED_WISHLIST, STORES } from '../data/catalog'
 import type { Order, Reservation } from '../data/types'
+import { api } from '../auth/api'
+import { useAuth } from '../auth/AuthContext'
+import { orderFromApi, reservationFromApi, type ApiOrder, type ApiReservation } from './serverCommerce'
 
 export interface CartLine {
   productId: string
@@ -33,6 +36,8 @@ interface AppState {
   reservations: Reservation[]
   placeReservation: (r: Reservation) => void
   updateReservation: (id: string, patch: Partial<Reservation>) => void
+  refreshCommerce: () => Promise<void>
+  commerceError: string | null
 
   followed: string[]
   toggleFollow: (storeId: string) => void
@@ -44,24 +49,27 @@ interface AppState {
   recentSearches: string[]
   pushSearch: (q: string) => void
 
-  liveChecks: Record<string, boolean> // productId → store confirmed
-  requestLiveCheck: (productId: string) => void
+  liveChecks: Record<string, 'pending' | 'available' | 'unavailable'> // storeId:productId → server reply
+  requestLiveCheck: (productId: string, storeId: string) => Promise<void>
 }
 
 const Ctx = createContext<AppState | null>(null)
 
-function load<T>(key: string, fallback: T): T {
+// The illustrative storefront keeps browsing preferences and seeded examples
+// account-scoped. New preview orders/reservations are server-owned and are
+// reconciled on return, so switching accounts never reveals another buyer's data.
+function load<T>(namespace: string, key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem('nearbuy:' + key)
+    const raw = localStorage.getItem(`nearbuy:${namespace}:${key}`)
     return raw ? (JSON.parse(raw) as T) : fallback
   } catch {
     return fallback
   }
 }
 
-function save(key: string, value: unknown) {
+function save(namespace: string, key: string, value: unknown) {
   try {
-    localStorage.setItem('nearbuy:' + key, JSON.stringify(value))
+    localStorage.setItem(`nearbuy:${namespace}:${key}`, JSON.stringify(value))
   } catch {
     /* ignore quota */
   }
@@ -69,27 +77,74 @@ function save(key: string, value: unknown) {
 
 let toastId = 1
 
-export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [cart, setCart] = useState<CartLine[]>(() => load('cart', [] as CartLine[]))
-  const [wishlist, setWishlist] = useState<string[]>(() => load('wishlist', SEED_WISHLIST))
-  const [orders, setOrders] = useState<Order[]>(() => load('orders', SEED_ORDERS))
+export function AppProvider({ children, namespace }: { children: React.ReactNode; namespace: string }) {
+  const { user } = useAuth()
+  const isBuyer = user?.role === 'CUSTOMER' && user.id === namespace
+  const seed = __NEARBUY_PREVIEW__ && namespace === 'demo-customer'
+  const [cart, setCart] = useState<CartLine[]>(() => load(namespace, 'cart', [] as CartLine[]))
+  const [wishlist, setWishlist] = useState<string[]>(() => load(namespace, 'wishlist', seed ? SEED_WISHLIST : []))
+  const [orders, setOrders] = useState<Order[]>(() => load(namespace, 'orders', seed ? SEED_ORDERS : []))
   const [reservations, setReservations] = useState<Reservation[]>(() =>
-    load('reservations', SEED_RESERVATIONS),
+    load(namespace, 'reservations', seed ? SEED_RESERVATIONS : []),
   )
-  const [followed, setFollowed] = useState<string[]>(() => load('followed', ['s1', 's6']))
+  const [followed, setFollowed] = useState<string[]>(() => load(namespace, 'followed', seed ? ['s1', 's6'] : []))
   const [recentSearches, setRecentSearches] = useState<string[]>(() =>
-    load('searches', ['volleyball under ₹1500', 'printer ink nearby']),
+    load(namespace, 'searches', seed ? ['volleyball under ₹1500', 'printer ink nearby'] : []),
   )
-  const [liveChecks, setLiveChecks] = useState<Record<string, boolean>>(() => load('livechecks', {}))
+  const [liveChecks, setLiveChecks] = useState<Record<string, 'pending' | 'available' | 'unavailable'>>(() => load(namespace, 'livechecks', {}))
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [commerceError, setCommerceError] = useState<string | null>(null)
 
-  useEffect(() => save('cart', cart), [cart])
-  useEffect(() => save('wishlist', wishlist), [wishlist])
-  useEffect(() => save('orders', orders), [orders])
-  useEffect(() => save('reservations', reservations), [reservations])
-  useEffect(() => save('followed', followed), [followed])
-  useEffect(() => save('searches', recentSearches), [recentSearches])
-  useEffect(() => save('livechecks', liveChecks), [liveChecks])
+  useEffect(() => save(namespace, 'cart', cart), [namespace, cart])
+  useEffect(() => save(namespace, 'wishlist', wishlist), [namespace, wishlist])
+  useEffect(() => save(namespace, 'orders', orders), [namespace, orders])
+  useEffect(() => save(namespace, 'reservations', reservations), [namespace, reservations])
+  useEffect(() => save(namespace, 'followed', followed), [namespace, followed])
+  useEffect(() => save(namespace, 'searches', recentSearches), [namespace, recentSearches])
+  useEffect(() => save(namespace, 'livechecks', liveChecks), [namespace, liveChecks])
+
+  const refreshCommerce = useCallback(async () => {
+    if (!__NEARBUY_PREVIEW__ || !isBuyer) return
+    try {
+      const [newOrders, newReservations, catalog, checks] = await Promise.all([
+        api.get<ApiOrder[]>('/orders'),
+        api.get<ApiReservation[]>('/reservations'),
+        api.get<{ stores: { id: string; open: boolean }[]; stock: { storeId: string; productId: string; stock: number; price?: number; updatedMinsAgo?: number }[] }>('/preview/catalog'),
+        api.get<{ storeId: string; productId: string; status: string }[]>('/stock-requests/mine'),
+      ])
+      const serverOrders = newOrders.map(orderFromApi)
+      const serverReservations = newReservations.map(reservationFromApi)
+      setOrders((prev) => [...serverOrders, ...prev.filter((o) => !o.serverId)])
+      setReservations((prev) => [...serverReservations, ...prev.filter((r) => !r.serverId)])
+      const statuses: Record<string, 'pending' | 'available' | 'unavailable'> = {}
+      for (const item of [...checks].reverse()) {
+        statuses[`${item.storeId}:${item.productId}`] = item.status === 'AVAILABLE' ? 'available' : item.status === 'NOT_AVAILABLE' ? 'unavailable' : 'pending'
+      }
+      setLiveChecks(statuses)
+      for (const update of catalog.stores) {
+        const store = STORES.find((s) => s.id === update.id)
+        if (store) store.open = update.open
+      }
+      for (const update of catalog.stock) {
+        const listing = LISTINGS.find((l) => l.storeId === update.storeId && l.productId === update.productId)
+        if (listing) {
+          listing.stock = update.stock
+          if (update.price !== undefined) listing.price = update.price
+          if (update.updatedMinsAgo !== undefined) listing.updatedMinsAgo = update.updatedMinsAgo
+        }
+      }
+      setCommerceError(null)
+    } catch (cause) {
+      setCommerceError(cause instanceof Error ? cause.message : 'Could not refresh your orders.')
+    }
+  }, [namespace, isBuyer])
+  useEffect(() => {
+    if (!__NEARBUY_PREVIEW__ || !isBuyer) return
+    void refreshCommerce()
+    const onReturn = () => { if (document.visibilityState === 'visible') void refreshCommerce() }
+    document.addEventListener('visibilitychange', onReturn)
+    return () => document.removeEventListener('visibilitychange', onReturn)
+  }, [refreshCommerce, isBuyer])
 
   const toast = useCallback((t: Omit<Toast, 'id'>) => {
     const id = toastId++
@@ -146,6 +201,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       placeReservation: (r) => setReservations((prev) => [r, ...prev]),
       updateReservation: (id, patch) =>
         setReservations((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r))),
+      refreshCommerce,
+      commerceError,
 
       followed,
       toggleFollow: (storeId) =>
@@ -162,16 +219,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setRecentSearches((prev) => [q, ...prev.filter((s) => s !== q)].slice(0, 6)),
 
       liveChecks,
-      requestLiveCheck: (productId) => {
-        setLiveChecks((prev) => ({ ...prev, [productId]: true }))
-        toast({
-          kind: 'success',
-          title: 'Store asked to confirm',
-          body: 'ABC Sports will reply with live availability shortly.',
-        })
+      requestLiveCheck: async (productId, storeId) => {
+        await api.post('/stock-requests', { productId, storeId, qty: 1 })
+        setLiveChecks((prev) => ({ ...prev, [`${storeId}:${productId}`]: 'pending' }))
+        toast({ kind: 'success', title: 'Shelf check sent', body: 'The store can now respond from its inventory queue.' })
       },
     }),
-    [cart, wishlist, orders, reservations, followed, toasts, recentSearches, liveChecks, addToCart, toast],
+    [cart, wishlist, orders, reservations, followed, toasts, recentSearches, liveChecks, commerceError, addToCart, toast, refreshCommerce],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
